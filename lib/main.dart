@@ -52,7 +52,7 @@ class ClinicAppMaster extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      home: const ClinicMainDashboard(),
+      home: const LoginScreen(),
     );
   }
 }
@@ -62,16 +62,33 @@ class UserModel {
   final String id;
   final String name;
   final String email;
+  final String password;
   final String role; // ADMIN, DOCTOR_SECRETARY, RECEPTIONIST
   final bool isActive;
 
-  UserModel({required this.id, required this.name, required this.email, required this.role, required this.isActive});
+  UserModel({
+    required this.id,
+    required this.name,
+    required this.email,
+    required this.password,
+    required this.role,
+    required this.isActive,
+  });
 
-  Map<String, dynamic> toMap() => {'id': id, 'name': name, 'email': email, 'role': role, 'isActive': isActive};
+  Map<String, dynamic> toMap() => {
+    'id': id,
+    'name': name,
+    'email': email,
+    'password': password,
+    'role': role,
+    'isActive': isActive,
+  };
+
   factory UserModel.fromMap(Map<String, dynamic> m) => UserModel(
     id: m['id'] ?? const Uuid().v4(),
     name: m['name'] ?? '',
     email: m['email'] ?? '',
+    password: m['password'] ?? '123456',
     role: m['role'] ?? 'RECEPTIONIST',
     isActive: m['isActive'] ?? true,
   );
@@ -122,7 +139,7 @@ class PatientModel {
   final String fullName;
   final String phone;
   final int age;
-  final String gender; // MALE, FEMALE
+  final String gender;
   final String notes;
 
   PatientModel({
@@ -162,10 +179,10 @@ class AppointmentModel {
   final String patientPhone;
   final String appointmentDate;
   final String startTime;
-  final String status; // CONFIRMED, WAITING, IN_ROOM, COMPLETED, CANCELLED, WAITING_LIST
-  final String paymentMethod; // CASH, NETWORK, INSURANCE
-  final String paymentStatus; // PAID, PENDING
-  final String createdByRole; // ADMIN, DOCTOR_SECRETARY, RECEPTIONIST
+  final String status;
+  final String paymentMethod;
+  final String paymentStatus;
+  final String createdByRole;
   final double fee;
   final bool isSynced;
 
@@ -221,9 +238,185 @@ class AppointmentModel {
   );
 }
 
+// ========================== LOGIN SCREEN ==========================
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final emailCtrl = TextEditingController(text: 'admin@clinic.com');
+  final passCtrl = TextEditingController(text: '123456');
+  bool obscurePass = true;
+
+  final List<UserModel> defaultUsers = [
+    UserModel(id: 'u1', name: 'المدير العام', email: 'admin@clinic.com', password: '123456', role: 'ADMIN', isActive: true),
+    UserModel(id: 'u2', name: 'منى السكرتيرة', email: 'mona@clinic.com', password: '123456', role: 'DOCTOR_SECRETARY', isActive: true),
+    UserModel(id: 'u3', name: 'أحمد الاستقبال', email: 'ahmed@clinic.com', password: '123456', role: 'RECEPTIONIST', isActive: true),
+  ];
+
+  void _handleLogin() async {
+    final email = emailCtrl.text.trim();
+    final pass = passCtrl.text.trim();
+
+    final prefs = await SharedPreferences.getInstance();
+    final savedUsersData = prefs.getString('clinic_users');
+    List<UserModel> userList = defaultUsers;
+
+    if (savedUsersData != null) {
+      userList = (jsonDecode(savedUsersData) as List).map((e) => UserModel.fromMap(e)).toList();
+    }
+
+    final user = userList.cast<UserModel?>().firstWhere(
+      (u) => u?.email.toLowerCase() == email.toLowerCase() && u?.password == pass,
+      orElse: () => null,
+    );
+
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(backgroundColor: Colors.red, content: Text('بيانات الدخول غير صحيحة')),
+      );
+      return;
+    }
+
+    if (!user.isActive) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(backgroundColor: Colors.orange, content: Text('هذا الحساب معطل حالياً من قبل الإدارة')),
+      );
+      return;
+    }
+
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ClinicMainDashboard(currentUser: user),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 90,
+                height: 90,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E3A8A),
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [
+                    BoxShadow(color: const Color(0xFF1E3A8A).withOpacity(0.3), blurRadius: 16, offset: const Offset(0, 6)),
+                  ],
+                ),
+                child: const Icon(Icons.local_hospital_rounded, color: Colors.white, size: 50),
+              ),
+              const SizedBox(height: 20),
+              const Text('نظام إدارة المراكز والعيادات', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              const SizedBox(height: 6),
+              const Text('سجل الدخول للمتابعة وفق صلاحياتك', style: TextStyle(color: Colors.grey, fontSize: 14)),
+              const SizedBox(height: 32),
+              Card(
+                elevation: 2,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    children: [
+                      TextField(
+                        controller: emailCtrl,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: InputDecoration(
+                          labelText: 'البريد الإلكتروني',
+                          prefixIcon: const Icon(Icons.email_outlined),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: passCtrl,
+                        obscureText: obscurePass,
+                        decoration: InputDecoration(
+                          labelText: 'كلمة المرور',
+                          prefixIcon: const Icon(Icons.lock_outline),
+                          suffixIcon: IconButton(
+                            icon: Icon(obscurePass ? Icons.visibility_off : Icons.visibility),
+                            onPressed: () => setState(() => obscurePass = !obscurePass),
+                          ),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1E3A8A),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          onPressed: _handleLogin,
+                          child: const Text('تسجيل الدخول', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              // Fast user picker for testing
+              Wrap(
+                spacing: 8,
+                children: [
+                  ActionChip(
+                    label: const Text('دخول كمدير'),
+                    onPressed: () {
+                      setState(() {
+                        emailCtrl.text = 'admin@clinic.com';
+                        passCtrl.text = '123456';
+                      });
+                    },
+                  ),
+                  ActionChip(
+                    label: const Text('دخول كسكرتير'),
+                    onPressed: () {
+                      setState(() {
+                        emailCtrl.text = 'mona@clinic.com';
+                        passCtrl.text = '123456';
+                      });
+                    },
+                  ),
+                  ActionChip(
+                    label: const Text('دخول كاستقبال'),
+                    onPressed: () {
+                      setState(() {
+                        emailCtrl.text = 'ahmed@clinic.com';
+                        passCtrl.text = '123456';
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ========================== MAIN DASHBOARD ==========================
 class ClinicMainDashboard extends StatefulWidget {
-  const ClinicMainDashboard({super.key});
+  final UserModel currentUser;
+  const ClinicMainDashboard({super.key, required this.currentUser});
 
   @override
   State<ClinicMainDashboard> createState() => _ClinicMainDashboardState();
@@ -231,7 +424,6 @@ class ClinicMainDashboard extends StatefulWidget {
 
 class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
   int _currentIndex = 0;
-  String currentRole = 'ADMIN'; // ADMIN, DOCTOR_SECRETARY, RECEPTIONIST
   bool isSyncing = false;
 
   List<UserModel> users = [];
@@ -239,7 +431,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
   List<PatientModel> patients = [];
   List<AppointmentModel> appointments = [];
 
-  // Active Secretary Doctor Link (For Secretary view)
   String activeSecretaryDoctorId = '';
 
   @override
@@ -259,9 +450,9 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
       users = (jsonDecode(usersData) as List).map((e) => UserModel.fromMap(e)).toList();
     } else {
       users = [
-        UserModel(id: 'u1', name: 'المدير العام', email: 'admin@clinic.com', role: 'ADMIN', isActive: true),
-        UserModel(id: 'u2', name: 'منى السكرتيرة', email: 'mona@clinic.com', role: 'DOCTOR_SECRETARY', isActive: true),
-        UserModel(id: 'u3', name: 'أحمد الاستقبال', email: 'ahmed@clinic.com', role: 'RECEPTIONIST', isActive: true),
+        UserModel(id: 'u1', name: 'المدير العام', email: 'admin@clinic.com', password: '123456', role: 'ADMIN', isActive: true),
+        UserModel(id: 'u2', name: 'منى السكرتيرة', email: 'mona@clinic.com', password: '123456', role: 'DOCTOR_SECRETARY', isActive: true),
+        UserModel(id: 'u3', name: 'أحمد الاستقبال', email: 'ahmed@clinic.com', password: '123456', role: 'RECEPTIONIST', isActive: true),
       ];
     }
 
@@ -284,12 +475,22 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           specialty: 'أخصائية طب وجراحة العيون',
           durationMinutes: 15,
           fee: 120.0,
-          allowReceptionBooking: false, // لا يسمح للاستقبال بالحجز
+          allowReceptionBooking: false,
           assignedSecretaryId: 'u2',
         ),
       ];
     }
-    activeSecretaryDoctorId = doctors.first.id;
+    
+    // Auto-link doctor if secretary
+    if (widget.currentUser.role == 'DOCTOR_SECRETARY') {
+      final linkedDoc = doctors.firstWhere(
+        (d) => d.assignedSecretaryId == widget.currentUser.id,
+        orElse: () => doctors.first,
+      );
+      activeSecretaryDoctorId = linkedDoc.id;
+    } else {
+      activeSecretaryDoctorId = doctors.first.id;
+    }
 
     if (patientsData != null) {
       patients = (jsonDecode(patientsData) as List).map((e) => PatientModel.fromMap(e)).toList();
@@ -351,7 +552,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     await prefs.setString('clinic_appointments', jsonEncode(appointments.map((e) => e.toMap()).toList()));
   }
 
-  // Conflict Resolution & Supabase Sync
   Future<void> _syncToSupabase() async {
     setState(() => isSyncing = true);
     try {
@@ -396,36 +596,29 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
       await _saveAllLocally();
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: Colors.green,
-          content: Text('تمت مزامنة المواعيد مع خادم Supabase بنجاح!'),
-        ),
+        const SnackBar(backgroundColor: Colors.green, content: Text('تمت مزامنة المواعيد مع خادم Supabase بنجاح!')),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: Colors.orange.shade800,
-          content: const Text('وضع عدم الاتصال: تم الحفظ محلياً بنجاح وسيتزامن عند توفر الشبكة'),
-        ),
+        const SnackBar(backgroundColor: Colors.orange, content: Text('وضع عدم الاتصال: تم الحفظ محلياً بنجاح')),
       );
     } finally {
       setState(() => isSyncing = false);
     }
   }
 
-  // Color Coding
   Color _getStatusColor(String status) {
     switch (status) {
       case 'CONFIRMED':
-        return const Color(0xFF2563EB); // أزرق: مؤكد
+        return const Color(0xFF2563EB);
       case 'WAITING':
-        return const Color(0xFFD97706); // أصفر: في صالة الانتظار
+        return const Color(0xFFD97706);
       case 'IN_ROOM':
-        return const Color(0xFF059669); // أخضر: في غرفة الطبيب
+        return const Color(0xFF059669);
       case 'COMPLETED':
-        return const Color(0xFF64748B); // رمادي: مكتمل
+        return const Color(0xFF64748B);
       case 'CANCELLED':
-        return const Color(0xFFDC2626); // أحمر: ملغى / لم يحضر
+        return const Color(0xFFDC2626);
       case 'WAITING_LIST':
         return Colors.purple;
       default:
@@ -452,16 +645,13 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     }
   }
 
-  // Filtered Appointments based on Role
   List<AppointmentModel> get filteredAppointments {
-    if (currentRole == 'ADMIN' || currentRole == 'RECEPTIONIST') {
+    if (widget.currentUser.role == 'ADMIN' || widget.currentUser.role == 'RECEPTIONIST') {
       return appointments;
     }
-    // Secretary only sees their assigned doctor's appointments
     return appointments.where((a) => a.doctorId == activeSecretaryDoctorId).toList();
   }
 
-  // No-Show Rate for patient
   double _calculateNoShowRate(String patientPhone) {
     final list = appointments.where((a) => a.patientPhone == patientPhone).toList();
     if (list.isEmpty) return 0.0;
@@ -469,16 +659,14 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     return (noShows / list.length) * 100;
   }
 
-  // Quick Booking with Conflict Resolution
   void _openQuickBookingDialog() {
     final nameCtrl = TextEditingController();
     final phoneCtrl = TextEditingController();
     final ageCtrl = TextEditingController(text: '30');
 
-    // Available doctors filtered for Receptionist
-    final availableDoctors = currentRole == 'RECEPTIONIST'
+    final availableDoctors = widget.currentUser.role == 'RECEPTIONIST'
         ? doctors.where((d) => d.allowReceptionBooking).toList()
-        : (currentRole == 'DOCTOR_SECRETARY'
+        : (widget.currentUser.role == 'DOCTOR_SECRETARY'
             ? doctors.where((d) => d.id == activeSecretaryDoctorId).toList()
             : doctors);
 
@@ -515,10 +703,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text(
-                          'الحجز السريع (أقل من 30 ثانية)',
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A)),
-                        ),
+                        const Text('الحجز السريع (أقل من 30 ثانية)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A))),
                         IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
                       ],
                     ),
@@ -634,7 +819,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                           return;
                         }
 
-                        // Auto register patient if new
                         PatientModel? existingPatient = patients.cast<PatientModel?>().firstWhere(
                           (p) => p?.phone == phoneCtrl.text.trim(),
                           orElse: () => null,
@@ -652,7 +836,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                           patients.add(existingPatient);
                         }
 
-                        // Conflict Resolution Rule:
                         final conflictIdx = appointments.indexWhere((a) =>
                             a.doctorId == selectedDoc.id &&
                             a.startTime == selectedTime &&
@@ -661,8 +844,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                         bool conflictSecretaryWin = false;
                         if (conflictIdx != -1) {
                           final existing = appointments[conflictIdx];
-                          if (currentRole == 'DOCTOR_SECRETARY' && existing.createdByRole == 'RECEPTIONIST') {
-                            // Secretary wins -> Reception moved to WAITING_LIST
+                          if (widget.currentUser.role == 'DOCTOR_SECRETARY' && existing.createdByRole == 'RECEPTIONIST') {
                             appointments[conflictIdx] = AppointmentModel(
                               id: existing.id,
                               doctorId: existing.doctorId,
@@ -692,10 +874,10 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                           patientPhone: existingPatient.phone,
                           appointmentDate: DateFormat('yyyy-MM-dd').format(DateTime.now()),
                           startTime: selectedTime,
-                          status: (conflictIdx != -1 && currentRole == 'RECEPTIONIST') ? 'WAITING_LIST' : 'CONFIRMED',
+                          status: (conflictIdx != -1 && widget.currentUser.role == 'RECEPTIONIST') ? 'WAITING_LIST' : 'CONFIRMED',
                           paymentMethod: paymentMethod,
                           paymentStatus: 'PAID',
-                          createdByRole: currentRole,
+                          createdByRole: widget.currentUser.role,
                           fee: selectedDoc.fee,
                           isSynced: false,
                         );
@@ -753,7 +935,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     _saveAllLocally();
   }
 
-  // Print Receipt Dialog
   void _showReceiptDialog(AppointmentModel app) {
     showDialog(
       context: context,
@@ -813,14 +994,14 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          currentRole == 'ADMIN'
+          widget.currentUser.role == 'ADMIN'
               ? 'لوحة إدارة النظام'
-              : (currentRole == 'DOCTOR_SECRETARY' ? 'سكرتارية العيادة' : 'الاستقبال العام'),
+              : (widget.currentUser.role == 'DOCTOR_SECRETARY' ? 'عيادة الطبيب' : 'الاستقبال العام'),
           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
         ),
         actions: [
           IconButton(
-            tooltip: 'مزامنة السحابة (Supabase)',
+            tooltip: 'مزامنة السحابة',
             onPressed: isSyncing ? null : _syncToSupabase,
             icon: isSyncing
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
@@ -830,21 +1011,20 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                     child: const Icon(Icons.cloud_sync_outlined),
                   ),
           ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.switch_account),
-            tooltip: 'تبديل الدور للتجربة',
-            onSelected: (role) => setState(() => currentRole = role),
-            itemBuilder: (ctx) => const [
-              PopupMenuItem(value: 'ADMIN', child: Text('👤 مدير النظام (Admin)')),
-              PopupMenuItem(value: 'DOCTOR_SECRETARY', child: Text('🩺 سكرتير الطبيب (Secretary)')),
-              PopupMenuItem(value: 'RECEPTIONIST', child: Text('🛎️ موظف الاستقبال (Receptionist)')),
-            ],
+          IconButton(
+            tooltip: 'تسجيل الخروج',
+            icon: const Icon(Icons.logout),
+            onPressed: () {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+              );
+            },
           ),
         ],
       ),
       body: Column(
         children: [
-          // Active Role and Sync Bar
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             color: const Color(0xFFEFF6FF),
@@ -852,19 +1032,9 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  'الدور الحالي: ${currentRole == 'ADMIN' ? 'مدير النظام' : (currentRole == 'DOCTOR_SECRETARY' ? 'سكرتير الطبيب' : 'الاستقبال')}',
+                  'المستخدم: ${widget.currentUser.name} (${widget.currentUser.role == 'ADMIN' ? 'مدير' : (widget.currentUser.role == 'DOCTOR_SECRETARY' ? 'سكرتير' : 'استقبال')})',
                   style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A)),
                 ),
-                if (currentRole == 'DOCTOR_SECRETARY')
-                  DropdownButton<String>(
-                    value: activeSecretaryDoctorId,
-                    isDense: true,
-                    underline: const SizedBox(),
-                    items: doctors.map((d) => DropdownMenuItem(value: d.id, child: Text(d.name, style: const TextStyle(fontSize: 12)))).toList(),
-                    onChanged: (id) {
-                      if (id != null) setState(() => activeSecretaryDoctorId = id);
-                    },
-                  ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
@@ -901,7 +1071,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           const NavigationDestination(icon: Icon(Icons.people_outline), selectedIcon: Icon(Icons.people), label: 'طابور الانتظار'),
           const NavigationDestination(icon: Icon(Icons.folder_shared_outlined), selectedIcon: Icon(Icons.folder_shared), label: 'سجل المرضى'),
           const NavigationDestination(icon: Icon(Icons.account_balance_wallet_outlined), selectedIcon: Icon(Icons.account_balance_wallet), label: 'المالية'),
-          if (currentRole == 'ADMIN')
+          if (widget.currentUser.role == 'ADMIN')
             const NavigationDestination(icon: Icon(Icons.admin_panel_settings_outlined), selectedIcon: Icon(Icons.admin_panel_settings), label: 'إدارة النظام'),
         ],
       ),
@@ -919,13 +1089,12 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
       case 3:
         return _buildFinanceView();
       case 4:
-        return currentRole == 'ADMIN' ? _buildAdminView() : _buildCalendarView();
+        return widget.currentUser.role == 'ADMIN' ? _buildAdminView() : _buildCalendarView();
       default:
         return _buildCalendarView();
     }
   }
 
-  // ================= 1. CALENDAR VIEW =================
   Widget _buildCalendarView() {
     final list = filteredAppointments;
 
@@ -1008,7 +1177,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= 2. QUEUE VIEW =================
   Widget _buildQueueView() {
     final waiting = filteredAppointments.where((a) => a.status == 'WAITING').toList();
     final inRoom = filteredAppointments.where((a) => a.status == 'IN_ROOM').toList();
@@ -1018,7 +1186,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
       children: [
         const Text('نظام طابور الانتظار والنداء', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         const SizedBox(height: 12),
-        // Active Inside
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -1080,7 +1247,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= 3. PATIENTS VIEW =================
   Widget _buildPatientsView() {
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -1131,7 +1297,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= 4. FINANCE & CLOSING VIEW =================
   Widget _buildFinanceView() {
     final list = filteredAppointments;
     final totalCash = list.where((a) => a.status != 'CANCELLED' && a.paymentMethod == 'CASH').fold(0.0, (s, a) => s + a.fee);
@@ -1214,7 +1379,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= 5. ADMIN VIEW (System Administrator) =================
   Widget _buildAdminView() {
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -1261,7 +1425,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               onChanged: (val) {
                 setState(() {
                   final idx = users.indexWhere((item) => item.id == u.id);
-                  users[idx] = UserModel(id: u.id, name: u.name, email: u.email, role: u.role, isActive: val);
+                  users[idx] = UserModel(id: u.id, name: u.name, email: u.email, password: u.password, role: u.role, isActive: val);
                 });
                 _saveAllLocally();
               },
