@@ -1242,4 +1242,940 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                           paymentStatus: remaining == 0 ? 'PAID' : (paid > 0 ? 'PARTIALLY_PAID' : 'UNPAID'),
                           createdByRole: widget.currentUser.role,
                           isSynced: false,
-                        
+                        );
+
+                        for (var srv in selectedExtraServices) {
+                          appointmentServices.add(AppointmentServiceModel(
+                            id: const Uuid().v4(),
+                            appointmentId: newAppId,
+                            serviceName: srv.name,
+                            price: srv.price,
+                          ));
+                        }
+
+                        if (paid > 0) {
+                          payments.add(PaymentReceiptModel(
+                            id: const Uuid().v4(),
+                            appointmentId: newAppId,
+                            patientId: p.id,
+                            amount: paid,
+                            paymentMethod: paymentMethod,
+                            paymentDate: DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now()),
+                          ));
+                        }
+
+                        setState(() {
+                          appointments.insert(0, newApp);
+                        });
+
+                        _saveAllLocally();
+                        _syncWithSupabase();
+                        Navigator.pop(ctx);
+
+                        if (conflictResolved) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              backgroundColor: Colors.deepPurple,
+                              content: Text('سياسة فض النزاع: تم إعطاء الأسبقية لسكرتير الطبيب وتحويل حجز الاستقبال لقائمة الانتظار السريعة.'),
+                            ),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: const Text('تأكيد وحفظ الموعد', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _updateStatus(AppointmentModel item, String newStatus) {
+    setState(() {
+      final idx = appointments.indexWhere((a) => a.id == item.id);
+      if (idx != -1) {
+        appointments[idx] = AppointmentModel(
+          id: item.id,
+          doctorId: item.doctorId,
+          doctorName: item.doctorName,
+          patientId: item.patientId,
+          patientName: item.patientName,
+          patientPhone: item.patientPhone,
+          appointmentDate: item.appointmentDate,
+          startTime: item.startTime,
+          endTime: item.endTime,
+          visitType: item.visitType,
+          status: newStatus,
+          totalAmount: item.totalAmount,
+          paidAmount: item.paidAmount,
+          remainingAmount: item.remainingAmount,
+          paymentMethod: item.paymentMethod,
+          paymentStatus: item.paymentStatus,
+          createdByRole: item.createdByRole,
+          isSynced: false,
+        );
+      }
+    });
+    _saveAllLocally();
+    _syncWithSupabase();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final unsyncedCount = appointments.where((a) => !a.isSynced).length;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          widget.currentUser.role == 'ADMIN'
+              ? 'لوحة إدارة النظام'
+              : (widget.currentUser.role == 'DOCTOR_SECRETARY' ? 'عيادة الطبيب المخصص' : 'الاستقبال العام'),
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'مزامنة السحابة',
+            onPressed: isSyncing ? null : _syncWithSupabase,
+            icon: isSyncing
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : Badge(
+                    label: Text('$unsyncedCount'),
+                    isLabelVisible: unsyncedCount > 0,
+                    child: const Icon(Icons.cloud_sync_outlined),
+                  ),
+          ),
+          IconButton(
+            tooltip: 'تسجيل الخروج',
+            icon: const Icon(Icons.logout),
+            onPressed: () async {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.remove('cached_current_user');
+              if (mounted) {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AuthGateScreen()),
+                );
+              }
+            },
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: const Color(0xFFEFF6FF),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'المستخدم: ${widget.currentUser.name} (${widget.currentUser.role == 'ADMIN' ? 'مدير' : (widget.currentUser.role == 'DOCTOR_SECRETARY' ? 'سكرتير' : 'استقبال')})',
+                  style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A)),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: unsyncedCount == 0 ? Colors.green.shade100 : Colors.amber.shade100,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    unsyncedCount == 0 ? 'سحابي متزامن' : '$unsyncedCount محلي أوفلاين',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: unsyncedCount == 0 ? Colors.green.shade900 : Colors.amber.shade900),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(child: _buildCurrentTab()),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: const Color(0xFF1E3A8A),
+        foregroundColor: Colors.white,
+        onPressed: _openQuickBookingDialog,
+        icon: const Icon(Icons.add),
+        label: const Text('حجز سريع', style: TextStyle(fontWeight: FontWeight.bold)),
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _currentIndex,
+        onDestinationSelected: (i) => setState(() => _currentIndex = i),
+        destinations: [
+          const NavigationDestination(icon: Icon(Icons.calendar_month_outlined), selectedIcon: Icon(Icons.calendar_month), label: 'التقويم'),
+          const NavigationDestination(icon: Icon(Icons.people_outline), selectedIcon: Icon(Icons.people), label: 'الانتظار'),
+          const NavigationDestination(icon: Icon(Icons.folder_shared_outlined), selectedIcon: Icon(Icons.folder_shared), label: 'المرضى'),
+          const NavigationDestination(icon: Icon(Icons.history_outlined), selectedIcon: Icon(Icons.history), label: 'أرشيف الأيام'),
+          const NavigationDestination(icon: Icon(Icons.account_balance_wallet_outlined), selectedIcon: Icon(Icons.account_balance_wallet), label: 'المالية'),
+          if (widget.currentUser.role == 'ADMIN')
+            const NavigationDestination(icon: Icon(Icons.admin_panel_settings_outlined), selectedIcon: Icon(Icons.admin_panel_settings), label: 'الإدارة'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCurrentTab() {
+    switch (_currentIndex) {
+      case 0:
+        return _buildCalendarView();
+      case 1:
+        return _buildQueueView();
+      case 2:
+        return _buildPatientsView();
+      case 3:
+        return _buildAuditHistoryView();
+      case 4:
+        return _buildFinanceView();
+      case 5:
+        return widget.currentUser.role == 'ADMIN' ? _buildAdminManagementView() : _buildCalendarView();
+      default:
+        return _buildCalendarView();
+    }
+  }
+
+  // ================= تبويب التقويم =================
+  Widget _buildCalendarView() {
+    final selectedDateStr = DateFormat('yyyy-MM-dd').format(selectedCalendarDate);
+    final list = currentRoleAppointments.where((a) => a.appointmentDate == selectedDateStr).toList();
+
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          color: Colors.white,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: List.generate(7, (index) {
+                final date = DateTime.now().add(Duration(days: index - 2));
+                final isSelected = DateFormat('yyyy-MM-dd').format(date) == selectedDateStr;
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: ChoiceChip(
+                    label: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(DateFormat('E', 'ar').format(date), style: TextStyle(color: isSelected ? Colors.white : Colors.black87, fontSize: 11)),
+                        Text(DateFormat('d/M').format(date), style: TextStyle(color: isSelected ? Colors.white : Colors.black87, fontWeight: FontWeight.bold, fontSize: 12)),
+                      ],
+                    ),
+                    selected: isSelected,
+                    selectedColor: const Color(0xFF1E3A8A),
+                    onSelected: (val) {
+                      if (val) setState(() => selectedCalendarDate = date);
+                    },
+                  ),
+                );
+              }),
+            ),
+          ),
+        ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('مواعيد: $selectedDateStr', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  Text('${list.length} موعد', style: const TextStyle(color: Colors.grey)),
+                ],
+              ),
+              const SizedBox(height: 10),
+              if (list.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(top: 40),
+                  child: Center(child: Text('لا توجد مواعيد مسجلة في هذا اليوم.')),
+                ),
+              ...list.map((item) {
+                Color color = Colors.blue;
+                String stText = 'مؤكد';
+                if (item.status == 'WAITING') {
+                  color = const Color(0xFFD97706);
+                  stText = 'في الانتظار';
+                } else if (item.status == 'IN_ROOM') {
+                  color = const Color(0xFF059669);
+                  stText = 'في غرفة الكشف';
+                } else if (item.status == 'COMPLETED') {
+                  color = const Color(0xFF64748B);
+                  stText = 'مكتمل';
+                } else if (item.status == 'CANCELLED') {
+                  color = const Color(0xFFDC2626);
+                  stText = 'ملغى / لم يحضر';
+                } else if (item.status == 'WAITING_LIST') {
+                  color = Colors.purple;
+                  stText = 'قائمة الانتظار السريعة';
+                }
+
+                return Card(
+                  elevation: 1,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(color: color.withOpacity(0.5), width: 1.5),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                CircleAvatar(radius: 6, backgroundColor: color),
+                                const SizedBox(width: 8),
+                                Text(item.patientName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                              ],
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(16)),
+                              child: Text(stText, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 12)),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text('${item.doctorName} • الوقت: ${item.startTime} (${item.visitType == 'RETURN_VISIT' ? 'مراجعة' : 'كشف'})'),
+                        Text(
+                          'المدفوع: ${item.paidAmount} ر.س | المتبقي: ${item.remainingAmount} ر.س | ${item.paymentMethod}',
+                          style: TextStyle(
+                            color: item.remainingAmount > 0 ? Colors.red.shade700 : Colors.green.shade800,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const Divider(height: 16),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: [
+                            OutlinedButton(onPressed: () => _updateStatus(item, 'WAITING'), child: const Text('في الانتظار', style: TextStyle(fontSize: 11))),
+                            OutlinedButton(onPressed: () => _updateStatus(item, 'IN_ROOM'), child: const Text('داخل الكشف', style: TextStyle(fontSize: 11))),
+                            OutlinedButton(onPressed: () => _updateStatus(item, 'COMPLETED'), child: const Text('اكتمل', style: TextStyle(fontSize: 11))),
+                            OutlinedButton(
+                              onPressed: () => _updateStatus(item, 'CANCELLED'),
+                              style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                              child: const Text('إلغاء / تغيب', style: TextStyle(fontSize: 11)),
+                            ),
+                            if (item.remainingAmount > 0)
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.amber.shade800, foregroundColor: Colors.white),
+                                onPressed: () => _openPayRemainingDialog(item),
+                                child: const Text('سداد المتبقي', style: TextStyle(fontSize: 11)),
+                              ),
+                            IconButton(
+                              icon: const Icon(Icons.picture_as_pdf, color: Color(0xFF1E3A8A)),
+                              tooltip: 'طباعة وحفظ سند القبض PDF',
+                              onPressed: () => _printReceiptPdf(item),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ================= تبويب طابور الانتظار =================
+  Widget _buildQueueView() {
+    final waiting = currentRoleAppointments.where((a) => a.status == 'WAITING').toList();
+    final inRoom = currentRoleAppointments.where((a) => a.status == 'IN_ROOM').toList();
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text('نظام طابور الانتظار والنداء', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.green.shade300)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.meeting_room, color: Colors.green),
+                  SizedBox(width: 8),
+                  Text('داخل غرفة الطبيب حالياً', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (inRoom.isEmpty) const Text('لا يوجد مريض داخل الغرفة حالياً', style: TextStyle(color: Colors.grey)),
+              ...inRoom.map((m) => ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(m.patientName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text('مع ${m.doctorName}'),
+                trailing: ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                  onPressed: () => _updateStatus(m, 'COMPLETED'),
+                  child: const Text('إنهاء الكشف'),
+                ),
+              )),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        const Text('صالة الانتظار (أسبقية الحضور):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        const SizedBox(height: 8),
+        if (waiting.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Center(child: Text('صالة الانتظار فارغة'))),
+        ...waiting.asMap().entries.map((entry) {
+          final idx = entry.key + 1;
+          final m = entry.value;
+          return Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: const Color(0xFF1E3A8A),
+                foregroundColor: Colors.white,
+                child: Text('$idx'),
+              ),
+              title: Text(m.patientName, style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text('${m.doctorName} • وقته: ${m.startTime}'),
+              trailing: ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF059669), foregroundColor: Colors.white),
+                onPressed: () => _updateStatus(m, 'IN_ROOM'),
+                child: const Text('إدخال للغرفة'),
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  // ================= تبويب سجل المرضى والملف الطبي =================
+  Widget _buildPatientsView() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('سجل المرضى الشامل', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            Text('${patients.length} مريض', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A))),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ...patients.map((p) {
+          final patientApps = appointments.where((a) => a.patientPhone == p.phone).toList();
+          final cancelled = patientApps.where((a) => a.status == 'CANCELLED').length;
+          final noShowRate = patientApps.isEmpty ? 0.0 : (cancelled / patientApps.length) * 100;
+          final totalRemaining = patientApps.fold(0.0, (s, a) => s + a.remainingAmount);
+
+          return Card(
+            margin: const EdgeInsets.only(bottom: 10),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: ExpansionTile(
+              leading: CircleAvatar(
+                backgroundColor: p.gender == 'MALE' ? Colors.blue.shade100 : Colors.pink.shade100,
+                child: Icon(Icons.person, color: p.gender == 'MALE' ? Colors.blue : Colors.pink),
+              ),
+              title: Text(p.fullName, style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text('جوال: ${p.phone} • العمر: ${p.age} • زيارات: ${patientApps.length}'),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text('غياب: ${noShowRate.toStringAsFixed(0)}%', style: TextStyle(color: noShowRate > 20 ? Colors.red : Colors.green, fontWeight: FontWeight.bold, fontSize: 11)),
+                      if (totalRemaining > 0)
+                        Text('ديون: $totalRemaining ر.س', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 11)),
+                    ],
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.edit, size: 18, color: Colors.blue),
+                    onPressed: () => _openEditPatientDialog(p),
+                  ),
+                ],
+              ),
+              children: [
+                if (p.notes.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Text('ملاحظات وسيرة طبية: ${p.notes}', style: const TextStyle(color: Colors.brown, fontSize: 12, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                const Divider(),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: Align(alignment: Alignment.centerRight, child: Text('سجل المواعيد والزيارات السابقة:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
+                ),
+                ...patientApps.map((pa) => ListTile(
+                  dense: true,
+                  title: Text('${pa.appointmentDate} - ${pa.doctorName} (${pa.visitType == 'RETURN_VISIT' ? 'مراجعة' : 'كشف'})'),
+                  subtitle: Text('الحالة: ${pa.status} | مدفوع: ${pa.paidAmount} | متبقي: ${pa.remainingAmount}'),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (pa.remainingAmount > 0)
+                        IconButton(
+                          icon: const Icon(Icons.payment, size: 18, color: Colors.green),
+                          tooltip: 'سداد المتبقي',
+                          onPressed: () => _openPayRemainingDialog(pa),
+                        ),
+                      IconButton(
+                        icon: const Icon(Icons.print, size: 18),
+                        onPressed: () => _printReceiptPdf(pa),
+                      ),
+                    ],
+                  ),
+                )),
+              ],
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  void _openEditPatientDialog(PatientModel patient) {
+    final nameCtrl = TextEditingController(text: patient.fullName);
+    final phoneCtrl = TextEditingController(text: patient.phone);
+    final ageCtrl = TextEditingController(text: patient.age.toString());
+    final notesCtrl = TextEditingController(text: patient.notes);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('تعديل الملف الطبي للمريض'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'الاسم الكامل')),
+              TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: 'رقم الجوال')),
+              TextField(controller: ageCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'العمر')),
+              TextField(controller: notesCtrl, maxLines: 2, decoration: const InputDecoration(labelText: 'ملاحظات طبية / حساسية')),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
+            onPressed: () {
+              setState(() {
+                patient.fullName = nameCtrl.text.trim();
+                patient.phone = phoneCtrl.text.trim();
+                patient.age = int.tryParse(ageCtrl.text) ?? patient.age;
+                patient.notes = notesCtrl.text.trim();
+              });
+              _saveAllLocally();
+              _syncWithSupabase();
+              Navigator.pop(ctx);
+            },
+            child: const Text('حفظ التعديلات'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ================= تبويب أرشيف الأيام والتقارير =================
+  Widget _buildAuditHistoryView() {
+    final selectedDateStr = DateFormat('yyyy-MM-dd').format(selectedAuditDate);
+    final dayApps = currentRoleAppointments.where((a) => a.appointmentDate == selectedDateStr).toList();
+    final dayIncome = dayApps.where((a) => a.status != 'CANCELLED').fold(0.0, (s, a) => s + a.paidAmount);
+    final dayRemaining = dayApps.where((a) => a.status != 'CANCELLED').fold(0.0, (s, a) => s + a.remainingAmount);
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('أرشيف حركة الأيام', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
+              onPressed: () async {
+                final d = await showDatePicker(
+                  context: context,
+                  initialDate: selectedAuditDate,
+                  firstDate: DateTime(2023),
+                  lastDate: DateTime(2030),
+                );
+                if (d != null) setState(() => selectedAuditDate = d);
+              },
+              icon: const Icon(Icons.date_range, size: 18),
+              label: Text(selectedDateStr),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            Expanded(child: _metricBox('المرضى', '${dayApps.length}', Colors.blue)),
+            const SizedBox(width: 8),
+            Expanded(child: _metricBox('المحصل', '$dayIncome ر.س', Colors.green)),
+            const SizedBox(width: 8),
+            Expanded(child: _metricBox('المتبقي', '$dayRemaining ر.س', Colors.red)),
+          ],
+        ),
+        const SizedBox(height: 16),
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12)),
+          onPressed: () => _printDailyClosingPdf(selectedAuditDate, dayApps),
+          icon: const Icon(Icons.picture_as_pdf),
+          label: const Text('تصدير وحفظ تقرير هذا اليوم PDF'),
+        ),
+        const SizedBox(height: 16),
+        const Text('كشوفات هذا اليوم بالتفصيل:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+        const SizedBox(height: 8),
+        if (dayApps.isEmpty) const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('لا توجد سجلات في هذا اليوم'))),
+        ...dayApps.map((a) => Card(
+          child: ListTile(
+            title: Text(a.patientName, style: const TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: Text('${a.doctorName} • ${a.startTime} • ${a.status}'),
+            trailing: Text('دفع: ${a.paidAmount}\nباقي: ${a.remainingAmount}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+          ),
+        )),
+      ],
+    );
+  }
+
+  // ================= تبويب المالية =================
+  Widget _buildFinanceView() {
+    final list = currentRoleAppointments;
+    final totalCash = list.where((a) => a.status != 'CANCELLED' && a.paymentMethod == 'CASH').fold(0.0, (s, a) => s + a.paidAmount);
+    final totalNetwork = list.where((a) => a.status != 'CANCELLED' && a.paymentMethod == 'NETWORK').fold(0.0, (s, a) => s + a.paidAmount);
+    final totalInsurance = list.where((a) => a.status != 'CANCELLED' && a.paymentMethod == 'INSURANCE').fold(0.0, (s, a) => s + a.paidAmount);
+    final totalRemaining = list.where((a) => a.status != 'CANCELLED').fold(0.0, (s, a) => s + a.remainingAmount);
+    final grandTotal = totalCash + totalNetwork + totalInsurance;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text('الإغلاق المالي الشامل', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(color: const Color(0xFF1E3A8A), borderRadius: BorderRadius.circular(16)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('إجمالي الدخل المحصل الفعلي', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              const SizedBox(height: 4),
+              Text('$grandTotal ريال', style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(child: _metricBox('نقدي', '$totalCash ر.س', Colors.green)),
+            const SizedBox(width: 6),
+            Expanded(child: _metricBox('شبكة/مدى', '$totalNetwork ر.س', Colors.blue)),
+            const SizedBox(width: 6),
+            Expanded(child: _metricBox('تأمين', '$totalInsurance ر.س', Colors.orange)),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _metricBox('إجمالي الديون والآجل المتبقي على المرضى', '$totalRemaining ريال', Colors.red),
+      ],
+    );
+  }
+
+  // ================= تبويب إدارة النظام =================
+  Widget _buildAdminManagementView() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('قائمة الأطباء والعيادات', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
+              onPressed: () => _openDoctorDialog(),
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('طبيب جديد'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ...doctors.map((d) => Card(
+          child: ListTile(
+            title: Text(d.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: Text('${d.specialty} • كشف: ${d.consultationFee} ر.س\nالدوام: ${d.workStartTime} إلى ${d.workEndTime} (${d.durationMinutes} دقيقة)'),
+            isThreeLine: true,
+            trailing: Switch(
+              value: d.allowReceptionBooking,
+              onChanged: (val) {
+                setState(() {
+                  final idx = doctors.indexWhere((item) => item.id == d.id);
+                  doctors[idx] = DoctorModel(
+                    id: d.id,
+                    name: d.name,
+                    specialty: d.specialty,
+                    consultationFee: d.consultationFee,
+                    durationMinutes: d.durationMinutes,
+                    workStartTime: d.workStartTime,
+                    workEndTime: d.workEndTime,
+                    allowReceptionBooking: val,
+                    isActive: d.isActive,
+                  );
+                });
+                _saveAllLocally();
+                _syncWithSupabase();
+              },
+            ),
+          ),
+        )),
+        const Divider(height: 32),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('الخدمات والفحوصات الطبية', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
+              onPressed: () => _openServiceDialog(),
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('خدمة جديدة'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ...services.map((s) => Card(
+          child: ListTile(
+            title: Text(s.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: Text('السعر: ${s.price} ريال'),
+          ),
+        )),
+        const Divider(height: 32),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('المستخدمون والصلاحيات', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
+              onPressed: () => _openUserDialog(),
+              icon: const Icon(Icons.person_add, size: 16),
+              label: const Text('مستخدم جديد'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ...users.map((u) {
+          final linkedDoc = doctors.cast<DoctorModel?>().firstWhere((d) => d?.id == u.linkedDoctorId, orElse: () => null);
+          return Card(
+            child: ListTile(
+              leading: Icon(u.role == 'ADMIN' ? Icons.security : (u.role == 'DOCTOR_SECRETARY' ? Icons.badge : Icons.support_agent)),
+              title: Text(u.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text('${u.email}\nالدور: ${u.role}${linkedDoc != null ? ' (مرتبط بـ ${linkedDoc.name})' : ''}'),
+              isThreeLine: u.linkedDoctorId != null,
+              trailing: Switch(
+                value: u.isActive,
+                onChanged: (val) {
+                  setState(() {
+                    final idx = users.indexWhere((item) => item.id == u.id);
+                    users[idx] = UserModel(
+                      id: u.id,
+                      name: u.name,
+                      email: u.email,
+                      password: u.password,
+                      role: u.role,
+                      linkedDoctorId: u.linkedDoctorId,
+                      isActive: val,
+                    );
+                  });
+                  _saveAllLocally();
+                  _syncWithSupabase();
+                },
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  void _openDoctorDialog() {
+    final nameCtrl = TextEditingController();
+    final specCtrl = TextEditingController();
+    final feeCtrl = TextEditingController(text: '100');
+    final durCtrl = TextEditingController(text: '15');
+    final startCtrl = TextEditingController(text: '09:00:00');
+    final endCtrl = TextEditingController(text: '17:00:00');
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('إضافة طبيب جديد وعيادة'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'اسم الطبيب')),
+              TextField(controller: specCtrl, decoration: const InputDecoration(labelText: 'التخصص')),
+              TextField(controller: feeCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'سعر المعاينة / الكشف')),
+              TextField(controller: durCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'مدة الكشف (بالدقائق)')),
+              TextField(controller: startCtrl, decoration: const InputDecoration(labelText: 'بداية الدوام (09:00:00)')),
+              TextField(controller: endCtrl, decoration: const InputDecoration(labelText: 'نهاية الدوام (17:00:00)')),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(
+            onPressed: () {
+              if (nameCtrl.text.isEmpty) return;
+              final newDoc = DoctorModel(
+                id: const Uuid().v4(),
+                name: nameCtrl.text.trim(),
+                specialty: specCtrl.text.trim(),
+                consultationFee: double.tryParse(feeCtrl.text) ?? 50.0,
+                durationMinutes: int.tryParse(durCtrl.text) ?? 15,
+                workStartTime: startCtrl.text.trim(),
+                workEndTime: endCtrl.text.trim(),
+                allowReceptionBooking: true,
+                isActive: true,
+              );
+              setState(() => doctors.add(newDoc));
+              _saveAllLocally();
+              _syncWithSupabase();
+              Navigator.pop(ctx);
+            },
+            child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openServiceDialog() {
+    final nameCtrl = TextEditingController();
+    final priceCtrl = TextEditingController(text: '50');
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('إضافة خدمة / فحص طبي'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'اسم الخدمة (مثل تخطيط قلب، أشعة)')),
+            TextField(controller: priceCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'السعر')),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(
+            onPressed: () {
+              if (nameCtrl.text.isEmpty) return;
+              final newSrv = ClinicServiceModel(
+                id: const Uuid().v4(),
+                name: nameCtrl.text.trim(),
+                price: double.tryParse(priceCtrl.text) ?? 0.0,
+                isActive: true,
+              );
+              setState(() => services.add(newSrv));
+              _saveAllLocally();
+              _syncWithSupabase();
+              Navigator.pop(ctx);
+            },
+            child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openUserDialog() {
+    final nameCtrl = TextEditingController();
+    final emailCtrl = TextEditingController();
+    final passCtrl = TextEditingController(text: '123456');
+    String role = 'RECEPTIONIST';
+    String? linkedDoctorId;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDlgState) => AlertDialog(
+          title: const Text('إضافة مستخدم وربط الصلاحيات'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'الاسم')),
+                TextField(controller: emailCtrl, decoration: const InputDecoration(labelText: 'البريد الإلكتروني')),
+                TextField(controller: passCtrl, decoration: const InputDecoration(labelText: 'كلمة المرور')),
+                DropdownButtonFormField<String>(
+                  value: role,
+                  decoration: const InputDecoration(labelText: 'الدور'),
+                  items: const [
+                    DropdownMenuItem(value: 'ADMIN', child: Text('مدير النظام')),
+                    DropdownMenuItem(value: 'DOCTOR_SECRETARY', child: Text('سكرتير طبيب')),
+                    DropdownMenuItem(value: 'RECEPTIONIST', child: Text('موظف استقبال')),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setDlgState(() => role = v);
+                  },
+                ),
+                if (role == 'DOCTOR_SECRETARY') ...[
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    value: linkedDoctorId,
+                    decoration: const InputDecoration(labelText: 'الطبيب المرتبط به حصرياً'),
+                    items: doctors.map((d) => DropdownMenuItem(value: d.id, child: Text(d.name))).toList(),
+                    onChanged: (v) => setDlgState(() => linkedDoctorId = v),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+            ElevatedButton(
+              onPressed: () {
+                if (nameCtrl.text.isEmpty || emailCtrl.text.isEmpty) return;
+                final newUser = UserModel(
+                  id: const Uuid().v4(),
+                  name: nameCtrl.text.trim(),
+                  email: emailCtrl.text.trim(),
+                  password: passCtrl.text.trim(),
+                  role: role,
+                  linkedDoctorId: role == 'DOCTOR_SECRETARY' ? linkedDoctorId : null,
+                  isActive: true,
+                );
+                setState(() => users.add(newUser));
+                _saveAllLocally();
+                _syncWithSupabase();
+                Navigator.pop(ctx);
+              },
+              child: const Text('حفظ'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _metricBox(String title, String val, MaterialColor color) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: color.shade50, borderRadius: BorderRadius.circular(12), border: Border.all(color: color.shade200)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: TextStyle(color: color.shade900, fontSize: 11, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text(val, style: TextStyle(color: color.shade900, fontSize: 14, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+}
