@@ -267,6 +267,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
     if (savedUsersData != null) {
       userList = (jsonDecode(savedUsersData) as List).map((e) => UserModel.fromMap(e)).toList();
+    } else {
+      await prefs.setString('clinic_users', jsonEncode(defaultUsers.map((e) => e.toMap()).toList()));
     }
 
     final user = userList.cast<UserModel?>().firstWhere(
@@ -372,7 +374,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              // Fast user picker for testing
               Wrap(
                 spacing: 8,
                 children: [
@@ -481,7 +482,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
       ];
     }
     
-    // Auto-link doctor if secretary
     if (widget.currentUser.role == 'DOCTOR_SECRETARY') {
       final linkedDoc = doctors.firstWhere(
         (d) => d.assignedSecretaryId == widget.currentUser.id,
@@ -987,6 +987,101 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
+  // ================= DIALOG: ADD / EDIT USER =================
+  void _openUserDialog([UserModel? userToEdit]) {
+    final nameCtrl = TextEditingController(text: userToEdit?.name ?? '');
+    final emailCtrl = TextEditingController(text: userToEdit?.email ?? '');
+    final passCtrl = TextEditingController(text: userToEdit?.password ?? '');
+    String selectedRole = userToEdit?.role ?? 'RECEPTIONIST';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Text(
+              userToEdit == null ? 'إضافة مستخدم جديد' : 'تعديل بيانات المستخدم',
+              style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A)),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(labelText: 'الاسم الكامل', prefixIcon: Icon(Icons.person)),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: emailCtrl,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(labelText: 'البريد الإلكتروني', prefixIcon: Icon(Icons.email)),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: passCtrl,
+                    decoration: const InputDecoration(labelText: 'كلمة المرور', prefixIcon: Icon(Icons.lock)),
+                  ),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String>(
+                    value: selectedRole,
+                    decoration: const InputDecoration(labelText: 'الدور / الصلاحية'),
+                    items: const [
+                      DropdownMenuItem(value: 'ADMIN', child: Text('مدير النظام')),
+                      DropdownMenuItem(value: 'DOCTOR_SECRETARY', child: Text('سكرتير طبيب')),
+                      DropdownMenuItem(value: 'RECEPTIONIST', child: Text('موظف استقبال')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) setDialogState(() => selectedRole = val);
+                    },
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
+                onPressed: () {
+                  if (nameCtrl.text.isEmpty || emailCtrl.text.isEmpty) return;
+
+                  setState(() {
+                    if (userToEdit == null) {
+                      users.add(UserModel(
+                        id: const Uuid().v4(),
+                        name: nameCtrl.text.trim(),
+                        email: emailCtrl.text.trim(),
+                        password: passCtrl.text.trim().isEmpty ? '123456' : passCtrl.text.trim(),
+                        role: selectedRole,
+                        isActive: true,
+                      ));
+                    } else {
+                      final idx = users.indexWhere((u) => u.id == userToEdit.id);
+                      if (idx != -1) {
+                        users[idx] = UserModel(
+                          id: userToEdit.id,
+                          name: nameCtrl.text.trim(),
+                          email: emailCtrl.text.trim(),
+                          password: passCtrl.text.trim().isEmpty ? userToEdit.password : passCtrl.text.trim(),
+                          role: selectedRole,
+                          isActive: userToEdit.isActive,
+                        );
+                      }
+                    }
+                  });
+                  _saveAllLocally();
+                  Navigator.pop(ctx);
+                },
+                child: const Text('حفظ'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final unsyncedCount = appointments.where((a) => !a.isSynced).length;
@@ -1409,7 +1504,22 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           ),
         )),
         const SizedBox(height: 16),
-        const Text('إدارة حسابات المستخدمين والصلاحيات', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('إدارة حسابات المستخدمين والصلاحيات', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1E3A8A),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+              onPressed: () => _openUserDialog(),
+              icon: const Icon(Icons.person_add, size: 18),
+              label: const Text('إضافة مستخدم'),
+            ),
+          ],
+        ),
         const SizedBox(height: 8),
         ...users.map((u) => Card(
           margin: const EdgeInsets.only(bottom: 8),
@@ -1419,16 +1529,26 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               color: const Color(0xFF1E3A8A),
             ),
             title: Text(u.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: Text('${u.email} • الدور: ${u.role}'),
-            trailing: Switch(
-              value: u.isActive,
-              onChanged: (val) {
-                setState(() {
-                  final idx = users.indexWhere((item) => item.id == u.id);
-                  users[idx] = UserModel(id: u.id, name: u.name, email: u.email, password: u.password, role: u.role, isActive: val);
-                });
-                _saveAllLocally();
-              },
+            subtitle: Text('${u.email} • الدور: ${u.role == 'ADMIN' ? 'مدير' : (u.role == 'DOCTOR_SECRETARY' ? 'سكرتير' : 'استقبال')}'),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.edit, color: Colors.blue),
+                  tooltip: 'تعديل البيانات',
+                  onPressed: () => _openUserDialog(u),
+                ),
+                Switch(
+                  value: u.isActive,
+                  onChanged: (val) {
+                    setState(() {
+                      final idx = users.indexWhere((item) => item.id == u.id);
+                      users[idx] = UserModel(id: u.id, name: u.name, email: u.email, password: u.password, role: u.role, isActive: val);
+                    });
+                    _saveAllLocally();
+                  },
+                ),
+              ],
             ),
           ),
         )),
