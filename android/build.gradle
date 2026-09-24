@@ -24,6 +24,13 @@ subprojects {
                     targetSdkVersion 34
                 }
             }
+            if (!project.android.hasProperty('flutter')) {
+                project.android.ext.flutter = [
+                    compileSdkVersion: 34,
+                    minSdkVersion: 21,
+                    targetSdkVersion: 34
+                ]
+            }
         }
     }
 }
