@@ -1018,14 +1018,11 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     final ageCtrl = TextEditingController(text: prefilledPatient?.age.toString() ?? '25');
     final paidCtrl = TextEditingController();
 
-    // تصفية الأطباء بناء على الصلاحية التي عينها المدير بدقة
     List<DoctorModel> availableDocs = doctors.where((d) => d.isActive).toList();
 
     if (widget.currentUser.role == 'RECEPTIONIST') {
-      // حصر موظف الاستقبال في الأطباء المصرح لهم فقط
       availableDocs = availableDocs.where((d) => d.allowReceptionBooking == true).toList();
     } else if (widget.currentUser.role == 'DOCTOR_SECRETARY') {
-      // حصر السكرتير في طبيبه فقط
       availableDocs = availableDocs.where((d) => d.id == widget.currentUser.linkedDoctorId).toList();
     }
 
@@ -2242,14 +2239,21 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
 
     showDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setDlgState) => AlertDialog(
-          title: const Text('إضافة خدمة / إجراء طبي'),
-          content: Column(
+      builder: (ctx) => AlertDialog(
+        title: const Text('إضافة خدمة / إجراء طبي'),
+        content: StatefulBuilder(
+          builder: (context, setDlgState) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'اسم الإجراء (معاينة، ضرب إبرة، غيار...)')),
-              TextField(controller: priceCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'السعر بالريال')),
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'اسم الإجراء (معاينة، ضرب إبرة، غيار...)'),
+              ),
+              TextField(
+                controller: priceCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'السعر بالريال'),
+              ),
               if (widget.currentUser.role == 'ADMIN') ...[
                 const SizedBox(height: 10),
                 DropdownButtonFormField<String>(
@@ -2301,10 +2305,10 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
 
     showDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setDlgState) => AlertDialog(
-          title: const Text('إضافة مستخدم وربط الصلاحيات'),
-          content: SingleChildScrollView(
+      builder: (ctx) => AlertDialog(
+        title: const Text('إضافة مستخدم وربط الصلاحيات'),
+        content: StatefulBuilder(
+          builder: (context, setDlgState) => SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -2335,32 +2339,32 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               ],
             ),
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-            ElevatedButton(
-              onPressed: () async {
-                if (nameCtrl.text.isEmpty || emailCtrl.text.isEmpty) return;
-                final newUser = UserModel(
-                  id: const Uuid().v4(),
-                  name: nameCtrl.text.trim(),
-                  email: emailCtrl.text.trim(),
-                  password: passCtrl.text.trim(),
-                  role: role,
-                  linkedDoctorId: role == 'DOCTOR_SECRETARY' ? linkedDoctorId : null,
-                  isActive: true,
-                );
-                setState(() => users.add(newUser));
-                await _saveAllLocally();
-                try {
-                  await Supabase.instance.client.from('users').upsert(newUser.toMap());
-                } catch (_) {}
-                Navigator.pop(ctx);
-                _showNotification('إدارة المستخدمين', 'تم إنشاء حساب ${newUser.name}');
-              },
-              child: const Text('حفظ'),
-            ),
-          ],
         ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(
+            onPressed: () async {
+              if (nameCtrl.text.isEmpty || emailCtrl.text.isEmpty) return;
+              final newUser = UserModel(
+                id: const Uuid().v4(),
+                name: nameCtrl.text.trim(),
+                email: emailCtrl.text.trim(),
+                password: passCtrl.text.trim(),
+                role: role,
+                linkedDoctorId: role == 'DOCTOR_SECRETARY' ? linkedDoctorId : null,
+                isActive: true,
+              );
+              setState(() => users.add(newUser));
+              await _saveAllLocally();
+              try {
+                await Supabase.instance.client.from('users').upsert(newUser.toMap());
+              } catch (_) {}
+              Navigator.pop(ctx);
+              _showNotification('إدارة المستخدمين', 'تم إنشاء حساب ${newUser.name}');
+            },
+            child: const Text('حفظ'),
+          ),
+        ],
       ),
     );
   }
