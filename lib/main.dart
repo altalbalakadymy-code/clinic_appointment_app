@@ -652,7 +652,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
         });
       }
 
-      // مزامنة الدفعات المنفصلة
       for (var pay in payments) {
         await client.from('payments').upsert({
           'id': pay.id,
@@ -664,7 +663,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
         });
       }
 
-      // مزامنة تفاصيل الخدمات
       for (var asrv in appointmentServices) {
         await client.from('appointment_services').upsert({
           'id': asrv.id,
@@ -747,7 +745,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     return slots;
   }
 
-  // ================= طباعة سند القبض PDF =================
   Future<void> _printReceiptPdf(AppointmentModel app, [PaymentReceiptModel? receipt]) async {
     final pdf = pw.Document();
     final font = await PdfGoogleFonts.cairoRegular();
@@ -834,7 +831,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     await Printing.layoutPdf(onLayout: (format) async => pdf.save());
   }
 
-  // ================= طباعة تقرير اليوم PDF =================
   Future<void> _printDailyClosingPdf(DateTime date, List<AppointmentModel> dayApps) async {
     final pdf = pw.Document();
     final font = await PdfGoogleFonts.cairoRegular();
@@ -891,7 +887,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     await Printing.layoutPdf(onLayout: (format) async => pdf.save());
   }
 
-  // ================= نافذة سداد دفعة للمتبقي =================
   void _openPayRemainingDialog(AppointmentModel app) {
     final payAmountCtrl = TextEditingController(text: app.remainingAmount.toStringAsFixed(0));
     String payMethod = 'CASH';
@@ -965,7 +960,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= الحجز السريع المطور =================
   void _openQuickBookingDialog() {
     final nameCtrl = TextEditingController();
     final phoneCtrl = TextEditingController();
@@ -1243,4 +1237,9 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                           status: (conflictIdx != -1 && widget.currentUser.role == 'RECEPTIONIST') ? 'WAITING_LIST' : 'CONFIRMED',
                           totalAmount: totalFee,
                           paidAmount: paid,
-                          remainingAmo
+                          remainingAmount: remaining,
+                          paymentMethod: paymentMethod,
+                          paymentStatus: remaining == 0 ? 'PAID' : (paid > 0 ? 'PARTIALLY_PAID' : 'UNPAID'),
+                          createdByRole: widget.currentUser.role,
+                          isSynced: false,
+                        
