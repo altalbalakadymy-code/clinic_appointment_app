@@ -1,6 +1,4 @@
 name: clinic_app
-
-name: clinic_app
 description: "Comprehensive Offline-First Multi-Role Clinic & Appointment System"
 publish_to: "none"
 version: 1.0.0+1
