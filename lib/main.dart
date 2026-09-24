@@ -564,6 +564,8 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
   bool isSyncing = false;
   bool isOnline = true;
   Timer? _connectivityTimer;
+  Timer? _autoSyncTimer;
+  RealtimeChannel? _liveChannel;
 
   List<UserModel> users = [];
   List<DoctorModel> doctors = [];
@@ -583,11 +585,16 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     _loadAllData();
     _initSupabaseRealtime();
     _startConnectivityCheck();
+    _startPeriodicSync();
   }
 
   @override
   void dispose() {
     _connectivityTimer?.cancel();
+    _autoSyncTimer?.cancel();
+    if (_liveChannel != null) {
+      Supabase.instance.client.removeChannel(_liveChannel!);
+    }
     super.dispose();
   }
 
@@ -602,6 +609,14 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
         }
       } catch (_) {
         if (mounted && isOnline) setState(() => isOnline = false);
+      }
+    });
+  }
+
+  void _startPeriodicSync() {
+    _autoSyncTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      if (isOnline && !isSyncing) {
+        _syncWithSupabase(silent: true);
       }
     });
   }
@@ -642,47 +657,53 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
 
   void _initSupabaseRealtime() {
     try {
-      Supabase.instance.client
-          .channel('public:clinic_app_realtime')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'appointments',
-            callback: (p) => _syncWithSupabase(),
-          )
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'patients',
-            callback: (p) => _syncWithSupabase(),
-          )
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'doctors',
-            callback: (p) => _syncWithSupabase(),
-          )
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'clinic_services',
-            callback: (p) => _syncWithSupabase(),
-          )
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'users',
-            callback: (p) => _syncWithSupabase(),
-          )
-          .subscribe();
+      final client = Supabase.instance.client;
+      final uniqueChannelName = 'clinic_sync_${DateTime.now().millisecondsSinceEpoch}';
+
+      _liveChannel = client.channel(uniqueChannelName)
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'appointments',
+          callback: (payload) => _syncWithSupabase(silent: true),
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'patients',
+          callback: (payload) => _syncWithSupabase(silent: true),
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'doctors',
+          callback: (payload) => _syncWithSupabase(silent: true),
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'clinic_services',
+          callback: (payload) => _syncWithSupabase(silent: true),
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'users',
+          callback: (payload) => _syncWithSupabase(silent: true),
+        )
+        ..subscribe((status, [error]) {
+          if (status == RealtimeSubscribeStatus.subscribed) {
+            debugPrint('Realtime channel subscribed successfully');
+          }
+        });
     } catch (e) {
-      debugPrint('Realtime error: $e');
+      debugPrint('Realtime setup error: $e');
     }
   }
 
-  Future<void> _syncWithSupabase() async {
+  Future<void> _syncWithSupabase({bool silent = false}) async {
     if (isSyncing) return;
-    setState(() => isSyncing = true);
+    if (!silent && mounted) setState(() => isSyncing = true);
 
     try {
       final client = Supabase.instance.client;
@@ -726,43 +747,45 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
       final aRes = await client.from('appointments').select();
       final uRes = await client.from('users').select();
 
-      setState(() {
-        doctors = (dRes as List).map((e) => DoctorModel.fromMap(e)).toList();
-        services = (sRes as List).map((e) => ClinicServiceModel.fromMap(e)).toList();
-        patients = (pRes as List).map((e) => PatientModel.fromMap(e)).toList();
-        users = (uRes as List).map((e) => UserModel.fromMap(e)).toList();
+      if (mounted) {
+        setState(() {
+          doctors = (dRes as List).map((e) => DoctorModel.fromMap(e)).toList();
+          services = (sRes as List).map((e) => ClinicServiceModel.fromMap(e)).toList();
+          patients = (pRes as List).map((e) => PatientModel.fromMap(e)).toList();
+          users = (uRes as List).map((e) => UserModel.fromMap(e)).toList();
 
-        appointments = (aRes as List).map((m) {
-          final d = doctors.cast<DoctorModel?>().firstWhere((doc) => doc?.id == m['doctor_id'], orElse: () => null);
-          final p = patients.cast<PatientModel?>().firstWhere((pat) => pat?.id == m['patient_id'], orElse: () => null);
-          return AppointmentModel(
-            id: m['id'],
-            doctorId: m['doctor_id'],
-            doctorName: d?.name ?? 'طبيب غير محدد',
-            patientId: m['patient_id'],
-            patientName: p?.fullName ?? 'مريض غير محدد',
-            patientPhone: p?.phone ?? '',
-            appointmentDate: m['appointment_date'],
-            startTime: m['start_time'],
-            endTime: m['end_time'] ?? m['start_time'],
-            visitType: m['visit_type'] ?? 'NEW_VISIT',
-            status: m['status'] ?? 'CONFIRMED',
-            totalAmount: (m['total_amount'] as num?)?.toDouble() ?? 0.0,
-            paidAmount: (m['paid_amount'] as num?)?.toDouble() ?? 0.0,
-            remainingAmount: (m['remaining_amount'] as num?)?.toDouble() ?? 0.0,
-            paymentMethod: m['payment_method'] ?? 'CASH',
-            paymentStatus: m['payment_status'] ?? 'PAID',
-            createdByRole: m['created_by_role'] ?? 'RECEPTIONIST',
-            isSynced: true,
-          );
-        }).toList();
-      });
+          appointments = (aRes as List).map((m) {
+            final d = doctors.cast<DoctorModel?>().firstWhere((doc) => doc?.id == m['doctor_id'], orElse: () => null);
+            final p = patients.cast<PatientModel?>().firstWhere((pat) => pat?.id == m['patient_id'], orElse: () => null);
+            return AppointmentModel(
+              id: m['id'],
+              doctorId: m['doctor_id'],
+              doctorName: d?.name ?? 'طبيب غير محدد',
+              patientId: m['patient_id'],
+              patientName: p?.fullName ?? 'مريض غير محدد',
+              patientPhone: p?.phone ?? '',
+              appointmentDate: m['appointment_date'],
+              startTime: m['start_time'],
+              endTime: m['end_time'] ?? m['start_time'],
+              visitType: m['visit_type'] ?? 'NEW_VISIT',
+              status: m['status'] ?? 'CONFIRMED',
+              totalAmount: (m['total_amount'] as num?)?.toDouble() ?? 0.0,
+              paidAmount: (m['paid_amount'] as num?)?.toDouble() ?? 0.0,
+              remainingAmount: (m['remaining_amount'] as num?)?.toDouble() ?? 0.0,
+              paymentMethod: m['payment_method'] ?? 'CASH',
+              paymentStatus: m['payment_status'] ?? 'PAID',
+              createdByRole: m['created_by_role'] ?? 'RECEPTIONIST',
+              isSynced: true,
+            );
+          }).toList();
+        });
+      }
 
       await _saveAllLocally();
     } catch (_) {
       // وضع الأوفلاين
     } finally {
-      if (mounted) setState(() => isSyncing = false);
+      if (mounted && !silent) setState(() => isSyncing = false);
     }
   }
 
@@ -1451,7 +1474,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
         actions: [
           IconButton(
             tooltip: 'مزامنة السحابة',
-            onPressed: isSyncing ? null : _syncWithSupabase,
+            onPressed: isSyncing ? null : () => _syncWithSupabase(),
             icon: isSyncing
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                 : Badge(
@@ -1943,7 +1966,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                // كارت التاريخ المرضي
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(color: Colors.amber.shade50, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.amber.shade200)),
@@ -1967,7 +1989,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                // ملخص مالي للمريض
                 Row(
                   children: [
                     Expanded(
@@ -2534,9 +2555,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                 setState(() {
                   existingService.name = nameCtrl.text.trim();
                   existingService.price = double.tryParse(priceCtrl.text) ?? existingService.price;
-                  if (widget.currentUser.role == 'ADMIN') {
-                    // تحديث الطبيب إذا كان مديراً
-                  }
                 });
                 await _saveAllLocally();
                 try {
