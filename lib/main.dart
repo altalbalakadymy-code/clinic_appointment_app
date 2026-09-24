@@ -138,7 +138,7 @@ class DoctorModel {
     id: m['id']?.toString() ?? const Uuid().v4(),
     name: m['name'] ?? '',
     specialty: m['specialty'] ?? '',
-    consultationFee: (m['consultation_fee'] as num?)?.toDouble() ?? 50.0,
+    consultationFee: (m['consultation_fee'] as num?)?.toDouble() ?? 3000.0,
     durationMinutes: (m['duration_minutes'] as num?)?.toInt() ?? 15,
     workStartTime: m['work_start_time']?.toString() ?? '09:00:00',
     workEndTime: m['work_end_time']?.toString() ?? '17:00:00',
@@ -830,7 +830,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                   if (attachedServices.isNotEmpty) ...[
                     pw.SizedBox(height: 6),
                     pw.Text('الخدمات والفحوصات المرفقة:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                    ...attachedServices.map((s) => pw.Text('- ${s.serviceName}: ${s.price} ريال')),
+                    ...attachedServices.map((s) => pw.Text('- ${s.serviceName}: ${s.price} ر.ي')),
                   ],
                   pw.SizedBox(height: 10),
                   pw.Container(
@@ -842,21 +842,21 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                           mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                           children: [
                             pw.Text('المبلغ الإجمالي:'),
-                            pw.Text('${app.totalAmount} ريال', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                            pw.Text('${app.totalAmount} ر.ي', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
                           ],
                         ),
                         pw.Row(
                           mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                           children: [
                             pw.Text('المدفوع في هذا السند:'),
-                            pw.Text('${receipt?.amount ?? app.paidAmount} ريال', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.green800)),
+                            pw.Text('${receipt?.amount ?? app.paidAmount} ر.ي', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.green800)),
                           ],
                         ),
                         pw.Row(
                           mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                           children: [
                             pw.Text('المتبقي في الذمة:'),
-                            pw.Text('${app.remainingAmount} ريال', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.red800)),
+                            pw.Text('${app.remainingAmount} ر.ي', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.red800)),
                           ],
                         ),
                       ],
@@ -907,8 +907,8 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                   mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
                   children: [
                     pw.Text('إجمالي المرضى: ${dayApps.length}'),
-                    pw.Text('المحصل: $totalIncome ريال', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.green800)),
-                    pw.Text('المتبقي: $totalRemaining ريال', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.red800)),
+                    pw.Text('المحصل: $totalIncome ر.ي', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.green800)),
+                    pw.Text('المتبقي: $totalRemaining ر.ي', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.red800)),
                   ],
                 ),
                 pw.SizedBox(height: 15),
@@ -949,7 +949,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('المبلغ المتبقي الحالي: ${app.remainingAmount} ريال', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
+            Text('المبلغ المتبقي الحالي: ${app.remainingAmount} ر.ي', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
             const SizedBox(height: 12),
             TextField(
               controller: payAmountCtrl,
@@ -962,7 +962,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               decoration: const InputDecoration(labelText: 'طريقة السداد'),
               items: const [
                 DropdownMenuItem(value: 'CASH', child: Text('نقدي')),
-                DropdownMenuItem(value: 'NETWORK', child: Text('شبكة/مدى')),
+                DropdownMenuItem(value: 'NETWORK', child: Text('شبكة/حوالة')),
                 DropdownMenuItem(value: 'INSURANCE', child: Text('تأمين طبي')),
               ],
               onChanged: (v) {
@@ -1001,7 +1001,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               _saveAllLocally();
               _syncWithSupabase();
               Navigator.pop(ctx);
-              _showNotification('تم تسجيل السداد', 'تم سداد $amount ر.س للمريض ${app.patientName}');
+              _showNotification('تم تسجيل السداد', 'تم سداد $amount ر.ي للمريض ${app.patientName}');
               _printReceiptPdf(app, newReceipt);
             },
             child: const Text('تأكيد السداد وطباعة السند'),
@@ -1190,7 +1190,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                         children: docServices.map((srv) {
                           final isSelected = selectedExtraServices.contains(srv);
                           return FilterChip(
-                            label: Text('${srv.name} (+${srv.price} ر.س)'),
+                            label: Text('${srv.name} (+${srv.price} ر.ي)'),
                             selected: isSelected,
                             onSelected: (selected) {
                               setModalState(() {
@@ -1215,7 +1215,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                           child: TextField(
                             controller: paidCtrl,
                             keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(labelText: 'المبلغ المدفوع الآن'),
+                            decoration: const InputDecoration(labelText: 'المبلغ المدفوع الآن (ر.ي)'),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -1225,7 +1225,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                             decoration: const InputDecoration(labelText: 'وسيلة الدفع'),
                             items: const [
                               DropdownMenuItem(value: 'CASH', child: Text('نقدي')),
-                              DropdownMenuItem(value: 'NETWORK', child: Text('شبكة/مدى')),
+                              DropdownMenuItem(value: 'NETWORK', child: Text('شبكة/حوالة')),
                               DropdownMenuItem(value: 'INSURANCE', child: Text('تأمين طبي')),
                               DropdownMenuItem(value: 'DEFERRED', child: Text('آجل / دين')),
                             ],
@@ -1270,7 +1270,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                         }
 
                         double paid = double.tryParse(paidCtrl.text) ?? 0.0;
-                        double remaining = (totalFee - paid).clamp(0.0, 99999.0);
+                        double remaining = (totalFee - paid).clamp(0.0, 999999.0);
 
                         final conflictIdx = appointments.indexWhere((a) =>
                             a.doctorId == selectedDoc.id &&
@@ -1635,7 +1635,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                         const SizedBox(height: 6),
                         Text('${item.doctorName} • الوقت: ${item.startTime} (${item.visitType == 'RETURN_VISIT' ? 'مراجعة / عودة مجانية' : 'معاينة جديدة'})'),
                         Text(
-                          'المدفوع: ${item.paidAmount} ر.س | المتبقي: ${item.remainingAmount} ر.س | ${item.paymentMethod}',
+                          'المدفوع: ${item.paidAmount} ر.ي | المتبقي: ${item.remainingAmount} ر.ي | ${item.paymentMethod}',
                           style: TextStyle(
                             color: item.remainingAmount > 0 ? Colors.red.shade700 : Colors.green.shade800,
                             fontWeight: FontWeight.bold,
@@ -1801,7 +1801,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                     children: [
                       Text('غياب: ${noShowRate.toStringAsFixed(0)}%', style: TextStyle(color: noShowRate > 20 ? Colors.red : Colors.green, fontWeight: FontWeight.bold, fontSize: 11)),
                       if (totalRemaining > 0)
-                        Text('ديون: $totalRemaining ر.س', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 11)),
+                        Text('ديون: $totalRemaining ر.ي', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 11)),
                     ],
                   ),
                   IconButton(
@@ -1851,7 +1851,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                 ...patientApps.map((pa) => ListTile(
                   dense: true,
                   title: Text('${pa.appointmentDate} - ${pa.doctorName} (${pa.visitType == 'RETURN_VISIT' ? 'مراجعة' : 'كشف'})'),
-                  subtitle: Text('الحالة: ${pa.status} | مدفوع: ${pa.paidAmount} | متبقي: ${pa.remainingAmount}'),
+                  subtitle: Text('الحالة: ${pa.status} | مدفوع: ${pa.paidAmount} ر.ي | متبقي: ${pa.remainingAmount} ر.ي'),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -1958,9 +1958,9 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           children: [
             Expanded(child: _metricBox('المرضى', '${dayApps.length}', Colors.blue)),
             const SizedBox(width: 8),
-            Expanded(child: _metricBox('المحصل', '$dayIncome ر.س', Colors.green)),
+            Expanded(child: _metricBox('المحصل', '$dayIncome ر.ي', Colors.green)),
             const SizedBox(width: 8),
-            Expanded(child: _metricBox('المتبقي', '$dayRemaining ر.س', Colors.red)),
+            Expanded(child: _metricBox('المتبقي', '$dayRemaining ر.ي', Colors.red)),
           ],
         ),
         const SizedBox(height: 16),
@@ -1978,7 +1978,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           child: ListTile(
             title: Text(a.patientName, style: const TextStyle(fontWeight: FontWeight.bold)),
             subtitle: Text('${a.doctorName} • ${a.startTime} • ${a.status} (${a.visitType == 'RETURN_VISIT' ? 'عودة' : 'كشف'})'),
-            trailing: Text('دفع: ${a.paidAmount}\nباقي: ${a.remainingAmount}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+            trailing: Text('دفع: ${a.paidAmount} ر.ي\nباقي: ${a.remainingAmount} ر.ي', textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
           ),
         )),
       ],
@@ -2007,22 +2007,22 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
             children: [
               const Text('إجمالي الدخل المحصل الفعلي', style: TextStyle(color: Colors.white70, fontSize: 13)),
               const SizedBox(height: 4),
-              Text('$grandTotal ريال', style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
+              Text('$grandTotal ر.ي', style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
             ],
           ),
         ),
         const SizedBox(height: 12),
         Row(
           children: [
-            Expanded(child: _metricBox('نقدي', '$totalCash ر.س', Colors.green)),
+            Expanded(child: _metricBox('نقدي', '$totalCash ر.ي', Colors.green)),
             const SizedBox(width: 6),
-            Expanded(child: _metricBox('شبكة/مدى', '$totalNetwork ر.س', Colors.blue)),
+            Expanded(child: _metricBox('شبكة/حوالة', '$totalNetwork ر.ي', Colors.blue)),
             const SizedBox(width: 6),
-            Expanded(child: _metricBox('تأمين', '$totalInsurance ر.س', Colors.orange)),
+            Expanded(child: _metricBox('تأمين', '$totalInsurance ر.ي', Colors.orange)),
           ],
         ),
         const SizedBox(height: 10),
-        _metricBox('إجمالي الديون والآجل المتبقي على المرضى', '$totalRemaining ريال', Colors.red),
+        _metricBox('إجمالي الديون والآجل المتبقي على المرضى', '$totalRemaining ر.ي', Colors.red),
       ],
     );
   }
@@ -2060,7 +2060,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
             child: ListTile(
               leading: const Icon(Icons.medical_services, color: Color(0xFF1E3A8A)),
               title: Text(s.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text('السعر: ${s.price} ريال ${doc != null ? "• عيادة: ${doc.name}" : ""}'),
+              subtitle: Text('السعر: ${s.price} ر.ي ${doc != null ? "• عيادة: ${doc.name}" : ""}'),
             ),
           );
         }),
@@ -2085,7 +2085,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               secondary: const Icon(Icons.person, color: Color(0xFF1E3A8A)),
               title: Text(d.name, style: const TextStyle(fontWeight: FontWeight.bold)),
               subtitle: Text(
-                '${d.specialty} • كشف: ${d.consultationFee} ر.س\n'
+                '${d.specialty} • كشف: ${d.consultationFee} ر.ي\n'
                 'الدوام: ${d.workStartTime} إلى ${d.workEndTime}\n'
                 'حجز الاستقبال: ${d.allowReceptionBooking ? "مسموح للاستقبال بالحجز" : "محظور (للسكرتير فقط)"}',
                 style: TextStyle(
@@ -2179,7 +2179,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
   void _openDoctorDialog() {
     final nameCtrl = TextEditingController();
     final specCtrl = TextEditingController();
-    final feeCtrl = TextEditingController(text: '100');
+    final feeCtrl = TextEditingController(text: '3000');
     final durCtrl = TextEditingController(text: '15');
     final startCtrl = TextEditingController(text: '09:00:00');
     final endCtrl = TextEditingController(text: '17:00:00');
@@ -2194,7 +2194,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
             children: [
               TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'اسم الطبيب')),
               TextField(controller: specCtrl, decoration: const InputDecoration(labelText: 'التخصص')),
-              TextField(controller: feeCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'سعر المعاينة / الكشف')),
+              TextField(controller: feeCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'سعر المعاينة / الكشف (ر.ي)')),
               TextField(controller: durCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'مدة الكشف (بالدقائق)')),
               TextField(controller: startCtrl, decoration: const InputDecoration(labelText: 'بداية الدوام (09:00:00)')),
               TextField(controller: endCtrl, decoration: const InputDecoration(labelText: 'نهاية الدوام (17:00:00)')),
@@ -2210,7 +2210,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                 id: const Uuid().v4(),
                 name: nameCtrl.text.trim(),
                 specialty: specCtrl.text.trim(),
-                consultationFee: double.tryParse(feeCtrl.text) ?? 50.0,
+                consultationFee: double.tryParse(feeCtrl.text) ?? 3000.0,
                 durationMinutes: int.tryParse(durCtrl.text) ?? 15,
                 workStartTime: startCtrl.text.trim(),
                 workEndTime: endCtrl.text.trim(),
@@ -2234,7 +2234,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
 
   void _openServiceDialog({String? defaultDocId}) {
     final nameCtrl = TextEditingController();
-    final priceCtrl = TextEditingController(text: '30');
+    final priceCtrl = TextEditingController(text: '1500');
     String? assignedDocId = defaultDocId;
 
     showDialog(
@@ -2252,7 +2252,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               TextField(
                 controller: priceCtrl,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'السعر بالريال'),
+                decoration: const InputDecoration(labelText: 'السعر (ر.ي)'),
               ),
               if (widget.currentUser.role == 'ADMIN') ...[
                 const SizedBox(height: 10),
