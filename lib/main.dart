@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -17,7 +16,13 @@ const String supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
+    await Supabase.initialize(
+      url: supabaseUrl, 
+      anonKey: supabaseAnonKey,
+      realtimeClientOptions: const RealtimeClientOptions(
+        eventsPerSecond: 10,
+      ),
+    );
   } catch (e) {
     debugPrint('Supabase Init Info: $e');
   }
@@ -301,7 +306,7 @@ class AppointmentModel {
   final String paymentMethod;
   String paymentStatus;
   final String createdByRole;
-  final bool isSynced;
+  bool isSynced;
 
   AppointmentModel({
     required this.id,
@@ -327,10 +332,8 @@ class AppointmentModel {
   Map<String, dynamic> toMap() => {
     'id': id,
     'doctor_id': doctorId,
-    'doctor_name': doctorName,
     'patient_id': patientId,
-    'patient_name': patientName,
-    'patient_phone': patientPhone,
+    'created_by_role': createdByRole,
     'appointment_date': appointmentDate,
     'start_time': startTime,
     'end_time': endTime,
@@ -341,17 +344,15 @@ class AppointmentModel {
     'remaining_amount': remainingAmount,
     'payment_method': paymentMethod,
     'payment_status': paymentStatus,
-    'created_by_role': createdByRole,
-    'is_synced': isSynced,
   };
 
-  factory AppointmentModel.fromMap(Map<String, dynamic> m) => AppointmentModel(
+  factory AppointmentModel.fromMap(Map<String, dynamic> m, {DoctorModel? doc, PatientModel? pat}) => AppointmentModel(
     id: m['id']?.toString() ?? const Uuid().v4(),
     doctorId: m['doctor_id']?.toString() ?? '',
-    doctorName: m['doctor_name'] ?? '',
+    doctorName: doc?.name ?? m['doctor_name'] ?? 'طبيب',
     patientId: m['patient_id']?.toString() ?? '',
-    patientName: m['patient_name'] ?? '',
-    patientPhone: m['patient_phone'] ?? '',
+    patientName: pat?.fullName ?? m['patient_name'] ?? 'مريض',
+    patientPhone: pat?.phone ?? m['patient_phone'] ?? '',
     appointmentDate: m['appointment_date']?.toString() ?? '',
     startTime: m['start_time']?.toString() ?? '',
     endTime: m['end_time']?.toString() ?? '',
@@ -363,7 +364,7 @@ class AppointmentModel {
     paymentMethod: m['payment_method'] ?? 'CASH',
     paymentStatus: m['payment_status'] ?? 'PAID',
     createdByRole: m['created_by_role'] ?? 'RECEPTIONIST',
-    isSynced: m['is_synced'] ?? false,
+    isSynced: true,
   );
 }
 
@@ -563,7 +564,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
   int _currentIndex = 0;
   bool isSyncing = false;
   bool isOnline = true;
-  Timer? _connectivityTimer;
   Timer? _autoSyncTimer;
   RealtimeChannel? _liveChannel;
 
@@ -584,13 +584,11 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     super.initState();
     _loadAllData();
     _initSupabaseRealtime();
-    _startConnectivityCheck();
     _startPeriodicSync();
   }
 
   @override
   void dispose() {
-    _connectivityTimer?.cancel();
     _autoSyncTimer?.cancel();
     if (_liveChannel != null) {
       Supabase.instance.client.removeChannel(_liveChannel!);
@@ -598,24 +596,10 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     super.dispose();
   }
 
-  void _startConnectivityCheck() {
-    _connectivityTimer = Timer.periodic(const Duration(seconds: 4), (timer) async {
-      try {
-        final result = await InternetAddress.lookup('google.com');
-        final currentStatus = result.isNotEmpty && result[0].rawAddress.isNotEmpty;
-        if (mounted && currentStatus != isOnline) {
-          setState(() => isOnline = currentStatus);
-          if (isOnline) _syncWithSupabase();
-        }
-      } catch (_) {
-        if (mounted && isOnline) setState(() => isOnline = false);
-      }
-    });
-  }
-
+  // مزامنة دورية كل 3 ثوان لضمان مطابقة الشاشات عبر مختلف الشبكات
   void _startPeriodicSync() {
-    _autoSyncTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      if (isOnline && !isSyncing) {
+    _autoSyncTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      if (!isSyncing) {
         _syncWithSupabase(silent: true);
       }
     });
@@ -658,9 +642,9 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
   void _initSupabaseRealtime() {
     try {
       final client = Supabase.instance.client;
-      final uniqueChannelName = 'clinic_sync_${DateTime.now().millisecondsSinceEpoch}';
+      final uniqueChannel = 'clinic_sync_${DateTime.now().microsecondsSinceEpoch}';
 
-      _liveChannel = client.channel(uniqueChannelName)
+      _liveChannel = client.channel(uniqueChannel)
         ..onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
@@ -685,19 +669,13 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           table: 'clinic_services',
           callback: (payload) => _syncWithSupabase(silent: true),
         )
-        ..onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'users',
-          callback: (payload) => _syncWithSupabase(silent: true),
-        )
         ..subscribe((status, [error]) {
           if (status == RealtimeSubscribeStatus.subscribed) {
-            debugPrint('Realtime channel subscribed successfully');
+            if (mounted) setState(() => isOnline = true);
           }
         });
     } catch (e) {
-      debugPrint('Realtime setup error: $e');
+      debugPrint('Realtime setup: $e');
     }
   }
 
@@ -708,47 +686,23 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     try {
       final client = Supabase.instance.client;
 
-      for (var d in doctors) {
-        await client.from('doctors').upsert(d.toMap());
-      }
-      for (var u in users) {
-        await client.from('users').upsert(u.toMap());
-      }
-      for (var p in patients) {
-        await client.from('patients').upsert(p.toMap());
-      }
-      for (var s in services) {
-        await client.from('clinic_services').upsert(s.toMap());
-      }
-
+      // 1. رفع المواعيد المحلية غير المرفوعة
       final unsynced = appointments.where((a) => !a.isSynced).toList();
       for (var app in unsynced) {
-        await client.from('appointments').upsert({
-          'id': app.id,
-          'doctor_id': app.doctorId,
-          'patient_id': app.patientId,
-          'created_by_role': app.createdByRole,
-          'appointment_date': app.appointmentDate,
-          'start_time': app.startTime,
-          'end_time': app.endTime,
-          'visit_type': app.visitType,
-          'status': app.status,
-          'total_amount': app.totalAmount,
-          'paid_amount': app.paidAmount,
-          'remaining_amount': app.remainingAmount,
-          'payment_method': app.paymentMethod,
-          'payment_status': app.paymentStatus,
-        });
+        await client.from('appointments').upsert(app.toMap());
+        app.isSynced = true;
       }
 
+      // 2. جلب كامل البيانات مباشرة من الجداول المركزية
+      final pRes = await client.from('patients').select();
       final dRes = await client.from('doctors').select();
       final sRes = await client.from('clinic_services').select();
-      final pRes = await client.from('patients').select();
       final aRes = await client.from('appointments').select();
       final uRes = await client.from('users').select();
 
       if (mounted) {
         setState(() {
+          isOnline = true;
           doctors = (dRes as List).map((e) => DoctorModel.fromMap(e)).toList();
           services = (sRes as List).map((e) => ClinicServiceModel.fromMap(e)).toList();
           patients = (pRes as List).map((e) => PatientModel.fromMap(e)).toList();
@@ -757,33 +711,15 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           appointments = (aRes as List).map((m) {
             final d = doctors.cast<DoctorModel?>().firstWhere((doc) => doc?.id == m['doctor_id'], orElse: () => null);
             final p = patients.cast<PatientModel?>().firstWhere((pat) => pat?.id == m['patient_id'], orElse: () => null);
-            return AppointmentModel(
-              id: m['id'],
-              doctorId: m['doctor_id'],
-              doctorName: d?.name ?? 'طبيب غير محدد',
-              patientId: m['patient_id'],
-              patientName: p?.fullName ?? 'مريض غير محدد',
-              patientPhone: p?.phone ?? '',
-              appointmentDate: m['appointment_date'],
-              startTime: m['start_time'],
-              endTime: m['end_time'] ?? m['start_time'],
-              visitType: m['visit_type'] ?? 'NEW_VISIT',
-              status: m['status'] ?? 'CONFIRMED',
-              totalAmount: (m['total_amount'] as num?)?.toDouble() ?? 0.0,
-              paidAmount: (m['paid_amount'] as num?)?.toDouble() ?? 0.0,
-              remainingAmount: (m['remaining_amount'] as num?)?.toDouble() ?? 0.0,
-              paymentMethod: m['payment_method'] ?? 'CASH',
-              paymentStatus: m['payment_status'] ?? 'PAID',
-              createdByRole: m['created_by_role'] ?? 'RECEPTIONIST',
-              isSynced: true,
-            );
+            return AppointmentModel.fromMap(m, doc: d, pat: p);
           }).toList();
         });
       }
 
       await _saveAllLocally();
-    } catch (_) {
-      // وضع الأوفلاين
+    } catch (e) {
+      if (mounted) setState(() => isOnline = false);
+      debugPrint('Sync status: Offline mode active');
     } finally {
       if (mounted && !silent) setState(() => isSyncing = false);
     }
@@ -1022,7 +958,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
-            onPressed: () {
+            onPressed: () async {
               double amount = double.tryParse(payAmountCtrl.text) ?? 0.0;
               if (amount <= 0 || amount > app.remainingAmount) {
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى إدخال مبلغ صحيح')));
@@ -1045,8 +981,16 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                 payments.add(newReceipt);
               });
 
-              _saveAllLocally();
-              _syncWithSupabase();
+              await _saveAllLocally();
+              try {
+                await Supabase.instance.client.from('payments').upsert(newReceipt.toMap());
+                await Supabase.instance.client.from('appointments').update({
+                  'paid_amount': app.paidAmount,
+                  'remaining_amount': app.remainingAmount,
+                  'payment_status': app.paymentStatus,
+                }).eq('id', app.id);
+              } catch (_) {}
+
               Navigator.pop(ctx);
               _showNotification('تم تسجيل السداد', 'تم سداد $amount ر.ي للمريض ${app.patientName}');
               _printReceiptPdf(app, newReceipt);
@@ -1058,7 +1002,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= الحجز السريع =================
+  // ================= الحجز السريع المباشر للسحابة =================
   void _openQuickBookingDialog({PatientModel? prefilledPatient, String initialVisitType = 'NEW_VISIT'}) {
     final nameCtrl = TextEditingController(text: prefilledPatient?.fullName ?? '');
     final phoneCtrl = TextEditingController(text: prefilledPatient?.phone ?? '');
@@ -1291,7 +1235,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
-                      onPressed: () {
+                      onPressed: () async {
                         if (nameCtrl.text.isEmpty || phoneCtrl.text.isEmpty) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(content: Text('يرجى تعبئة الاسم ورقم الجوال')),
@@ -1374,32 +1318,20 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                           isSynced: false,
                         );
 
-                        for (var srv in selectedExtraServices) {
-                          appointmentServices.add(AppointmentServiceModel(
-                            id: const Uuid().v4(),
-                            appointmentId: newAppId,
-                            serviceName: srv.name,
-                            price: srv.price,
-                          ));
-                        }
-
-                        if (paid > 0) {
-                          payments.add(PaymentReceiptModel(
-                            id: const Uuid().v4(),
-                            appointmentId: newAppId,
-                            patientId: p.id,
-                            amount: paid,
-                            paymentMethod: paymentMethod,
-                            paymentDate: DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now()),
-                          ));
+                        // حفظ فوري في السحابة لضمان ظهوره على الجهاز الآخر في نفس اللحظة
+                        try {
+                          await Supabase.instance.client.from('patients').upsert(p.toMap());
+                          await Supabase.instance.client.from('appointments').upsert(newApp.toMap());
+                          newApp.isSynced = true;
+                        } catch (e) {
+                          debugPrint('Direct upload failed: $e');
                         }
 
                         setState(() {
                           appointments.insert(0, newApp);
                         });
 
-                        _saveAllLocally();
-                        _syncWithSupabase();
+                        await _saveAllLocally();
                         Navigator.pop(ctx);
 
                         _showNotification(
@@ -1428,7 +1360,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  void _updateStatus(AppointmentModel item, String newStatus) {
+  void _updateStatus(AppointmentModel item, String newStatus) async {
     setState(() {
       final idx = appointments.indexWhere((a) => a.id == item.id);
       if (idx != -1) {
@@ -1454,8 +1386,15 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
         );
       }
     });
-    _saveAllLocally();
-    _syncWithSupabase();
+
+    await _saveAllLocally();
+    try {
+      await Supabase.instance.client
+          .from('appointments')
+          .update({'status': newStatus})
+          .eq('id', item.id);
+    } catch (_) {}
+
     _showNotification('تحديث حالة المريض', 'تم تغيير حالة ${item.patientName} إلى: $newStatus');
   }
 
@@ -1515,7 +1454,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      isOnline ? 'متصل بالإنترنت (مزامنة حية)' : 'أوفلاين (حفظ محلي في الهاتف)',
+                      isOnline ? 'سحابي متزامن (مباشر)' : 'محلي أوفلاين (جاري إعادة الاتصال)',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
@@ -1930,7 +1869,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= الملف الطبي الشامل للمريض =================
   void _openPatientProfileDialog(PatientModel patient) {
     final patientApps = appointments.where((a) => a.patientPhone == patient.phone).toList();
     final totalRemaining = patientApps.fold(0.0, (s, a) => s + a.remainingAmount);
@@ -2080,7 +2018,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'الاسم الكامل')),
               TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: 'رقم الجوال')),
               TextField(controller: ageCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'العمر')),
-              TextField(controller: chronicCtrl, decoration: const InputDecoration(labelText: 'الأمراض المزمنة / فصيلة الدم (سكر، ضغط، حساسية...)')),
+              TextField(controller: chronicCtrl, decoration: const InputDecoration(labelText: 'الأمراض المزمنة / فصيلة الدم')),
               TextField(controller: notesCtrl, maxLines: 2, decoration: const InputDecoration(labelText: 'ملاحظات الطبيب وسير العمل')),
             ],
           ),
@@ -2108,110 +2046,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           ),
         ],
       ),
-    );
-  }
-
-  // ================= تبويب أرشيف الأيام والتقارير =================
-  Widget _buildAuditHistoryView() {
-    final selectedDateStr = DateFormat('yyyy-MM-dd').format(selectedAuditDate);
-    final dayApps = currentRoleAppointments.where((a) => a.appointmentDate == selectedDateStr).toList();
-    final dayIncome = dayApps.where((a) => a.status != 'CANCELLED').fold(0.0, (s, a) => s + a.paidAmount);
-    final dayRemaining = dayApps.where((a) => a.status != 'CANCELLED').fold(0.0, (s, a) => s + a.remainingAmount);
-
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text('أرشيف حركة الأيام', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
-              onPressed: () async {
-                final d = await showDatePicker(
-                  context: context,
-                  initialDate: selectedAuditDate,
-                  firstDate: DateTime(2023),
-                  lastDate: DateTime(2030),
-                );
-                if (d != null) setState(() => selectedAuditDate = d);
-              },
-              icon: const Icon(Icons.date_range, size: 18),
-              label: Text(selectedDateStr),
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        Row(
-          children: [
-            Expanded(child: _metricBox('المرضى', '${dayApps.length}', Colors.blue)),
-            const SizedBox(width: 8),
-            Expanded(child: _metricBox('المحصل', '$dayIncome ر.ي', Colors.green)),
-            const SizedBox(width: 8),
-            Expanded(child: _metricBox('المتبقي', '$dayRemaining ر.ي', Colors.red)),
-          ],
-        ),
-        const SizedBox(height: 16),
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12)),
-          onPressed: () => _printDailyClosingPdf(selectedAuditDate, dayApps),
-          icon: const Icon(Icons.picture_as_pdf),
-          label: const Text('تصدير وحفظ تقرير هذا اليوم PDF'),
-        ),
-        const SizedBox(height: 16),
-        const Text('كشوفات هذا اليوم بالتفصيل:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-        const SizedBox(height: 8),
-        if (dayApps.isEmpty) const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('لا توجد سجلات في هذا اليوم'))),
-        ...dayApps.map((a) => Card(
-          child: ListTile(
-            title: Text(a.patientName, style: const TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: Text('${a.doctorName} • ${a.startTime} • ${a.status} (${a.visitType == 'RETURN_VISIT' ? 'عودة' : 'كشف'})'),
-            trailing: Text('دفع: ${a.paidAmount} ر.ي\nباقي: ${a.remainingAmount} ر.ي', textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-          ),
-        )),
-      ],
-    );
-  }
-
-  // ================= تبويب المالية =================
-  Widget _buildFinanceView() {
-    final list = currentRoleAppointments;
-    final totalCash = list.where((a) => a.status != 'CANCELLED' && a.paymentMethod == 'CASH').fold(0.0, (s, a) => s + a.paidAmount);
-    final totalNetwork = list.where((a) => a.status != 'CANCELLED' && a.paymentMethod == 'NETWORK').fold(0.0, (s, a) => s + a.paidAmount);
-    final totalInsurance = list.where((a) => a.status != 'CANCELLED' && a.paymentMethod == 'INSURANCE').fold(0.0, (s, a) => s + a.paidAmount);
-    final totalRemaining = list.where((a) => a.status != 'CANCELLED').fold(0.0, (s, a) => s + a.remainingAmount);
-    final grandTotal = totalCash + totalNetwork + totalInsurance;
-
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const Text('الإغلاق المالي الشامل', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(color: const Color(0xFF1E3A8A), borderRadius: BorderRadius.circular(16)),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('إجمالي الدخل المحصل الفعلي', style: TextStyle(color: Colors.white70, fontSize: 13)),
-              const SizedBox(height: 4),
-              Text('$grandTotal ر.ي', style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(child: _metricBox('نقدي', '$totalCash ر.ي', Colors.green)),
-            const SizedBox(width: 6),
-            Expanded(child: _metricBox('شبكة/حوالة', '$totalNetwork ر.ي', Colors.blue)),
-            const SizedBox(width: 6),
-            Expanded(child: _metricBox('تأمين', '$totalInsurance ر.ي', Colors.orange)),
-          ],
-        ),
-        const SizedBox(height: 10),
-        _metricBox('إجمالي الديون والآجل المتبقي على المرضى', '$totalRemaining ر.ي', Colors.red),
-      ],
     );
   }
 
@@ -2394,7 +2228,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= نوافذ الإضافة والتعديل والحذف =================
   void _openDoctorDialog({DoctorModel? existingDoctor}) {
     final nameCtrl = TextEditingController(text: existingDoctor?.name ?? '');
     final specCtrl = TextEditingController(text: existingDoctor?.specialty ?? '');
