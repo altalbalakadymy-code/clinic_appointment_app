@@ -1,5 +1,5 @@
 name: clinic_app
-description: "Comprehensive Offline-First Multi-Role Clinic System"
+description: "Comprehensive Clinic Management System"
 publish_to: "none"
 version: 1.0.0+1
 
@@ -11,10 +11,13 @@ dependencies:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
-  supabase_flutter: ^2.8.1
+  supabase_flutter: ^2.8.0
   intl: any
   uuid: ^4.4.0
   shared_preferences: ^2.2.3
+  pdf: ^3.10.8
+  printing: ^5.13.1
+  path_provider: ^2.1.2
 
 dev_dependencies:
   flutter_test:
