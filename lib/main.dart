@@ -596,7 +596,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     super.dispose();
   }
 
-  // مزامنة دورية كل 3 ثوان لضمان مطابقة الشاشات عبر مختلف الشبكات
   void _startPeriodicSync() {
     _autoSyncTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
       if (!isSyncing) {
@@ -686,14 +685,12 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     try {
       final client = Supabase.instance.client;
 
-      // 1. رفع المواعيد المحلية غير المرفوعة
       final unsynced = appointments.where((a) => !a.isSynced).toList();
       for (var app in unsynced) {
         await client.from('appointments').upsert(app.toMap());
         app.isSynced = true;
       }
 
-      // 2. جلب كامل البيانات مباشرة من الجداول المركزية
       final pRes = await client.from('patients').select();
       final dRes = await client.from('doctors').select();
       final sRes = await client.from('clinic_services').select();
@@ -864,6 +861,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     await Printing.layoutPdf(onLayout: (format) async => pdf.save());
   }
 
+  // ================= طباعة تقرير اليوم =================
   Future<void> _printDailyClosingPdf(DateTime date, List<AppointmentModel> dayApps) async {
     final pdf = pw.Document();
     final font = await PdfGoogleFonts.cairoRegular();
@@ -1318,7 +1316,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                           isSynced: false,
                         );
 
-                        // حفظ فوري في السحابة لضمان ظهوره على الجهاز الآخر في نفس اللحظة
                         try {
                           await Supabase.instance.client.from('patients').upsert(p.toMap());
                           await Supabase.instance.client.from('appointments').upsert(newApp.toMap());
@@ -2049,7 +2046,111 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= تبويب إدارة العيادات والخدمات والصلاحيات والحذف والتعديل =================
+  // ================= تبويب أرشيف الأيام والتقارير =================
+  Widget _buildAuditHistoryView() {
+    final selectedDateStr = DateFormat('yyyy-MM-dd').format(selectedAuditDate);
+    final dayApps = currentRoleAppointments.where((a) => a.appointmentDate == selectedDateStr).toList();
+    final dayIncome = dayApps.where((a) => a.status != 'CANCELLED').fold(0.0, (s, a) => s + a.paidAmount);
+    final dayRemaining = dayApps.where((a) => a.status != 'CANCELLED').fold(0.0, (s, a) => s + a.remainingAmount);
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('أرشيف حركة الأيام', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
+              onPressed: () async {
+                final d = await showDatePicker(
+                  context: context,
+                  initialDate: selectedAuditDate,
+                  firstDate: DateTime(2023),
+                  lastDate: DateTime(2030),
+                );
+                if (d != null) setState(() => selectedAuditDate = d);
+              },
+              icon: const Icon(Icons.date_range, size: 18),
+              label: Text(selectedDateStr),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            Expanded(child: _metricBox('المرضى', '${dayApps.length}', Colors.blue)),
+            const SizedBox(width: 8),
+            Expanded(child: _metricBox('المحصل', '$dayIncome ر.ي', Colors.green)),
+            const SizedBox(width: 8),
+            Expanded(child: _metricBox('المتبقي', '$dayRemaining ر.ي', Colors.red)),
+          ],
+        ),
+        const SizedBox(height: 16),
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12)),
+          onPressed: () => _printDailyClosingPdf(selectedAuditDate, dayApps),
+          icon: const Icon(Icons.picture_as_pdf),
+          label: const Text('تصدير وحفظ تقرير هذا اليوم PDF'),
+        ),
+        const SizedBox(height: 16),
+        const Text('كشوفات هذا اليوم بالتفصيل:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+        const SizedBox(height: 8),
+        if (dayApps.isEmpty) const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('لا توجد سجلات في هذا اليوم'))),
+        ...dayApps.map((a) => Card(
+          child: ListTile(
+            title: Text(a.patientName, style: const TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: Text('${a.doctorName} • ${a.startTime} • ${a.status} (${a.visitType == 'RETURN_VISIT' ? 'عودة' : 'كشف'})'),
+            trailing: Text('دفع: ${a.paidAmount} ر.ي\nباقي: ${a.remainingAmount} ر.ي', textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+          ),
+        )),
+      ],
+    );
+  }
+
+  // ================= تبويب المالية =================
+  Widget _buildFinanceView() {
+    final list = currentRoleAppointments;
+    final totalCash = list.where((a) => a.status != 'CANCELLED' && a.paymentMethod == 'CASH').fold(0.0, (s, a) => s + a.paidAmount);
+    final totalNetwork = list.where((a) => a.status != 'CANCELLED' && a.paymentMethod == 'NETWORK').fold(0.0, (s, a) => s + a.paidAmount);
+    final totalInsurance = list.where((a) => a.status != 'CANCELLED' && a.paymentMethod == 'INSURANCE').fold(0.0, (s, a) => s + a.paidAmount);
+    final totalRemaining = list.where((a) => a.status != 'CANCELLED').fold(0.0, (s, a) => s + a.remainingAmount);
+    final grandTotal = totalCash + totalNetwork + totalInsurance;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text('الإغلاق المالي الشامل', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(color: const Color(0xFF1E3A8A), borderRadius: BorderRadius.circular(16)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('إجمالي الدخل المحصل الفعلي', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              const SizedBox(height: 4),
+              Text('$grandTotal ر.ي', style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(child: _metricBox('نقدي', '$totalCash ر.ي', Colors.green)),
+            const SizedBox(width: 6),
+            Expanded(child: _metricBox('شبكة/حوالة', '$totalNetwork ر.ي', Colors.blue)),
+            const SizedBox(width: 6),
+            Expanded(child: _metricBox('تأمين', '$totalInsurance ر.ي', Colors.orange)),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _metricBox('إجمالي الديون والآجل المتبقي على المرضى', '$totalRemaining ر.ي', Colors.red),
+      ],
+    );
+  }
+
+  // ================= تبويب إدارة العيادات والخدمات =================
   Widget _buildManagementAndServicesView() {
     final isSecretary = widget.currentUser.role == 'DOCTOR_SECRETARY';
     final currentDocId = isSecretary ? widget.currentUser.linkedDoctorId : null;
@@ -2075,7 +2176,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
         ),
         const SizedBox(height: 8),
         if (displayServices.isEmpty)
-          const Padding(padding: EdgeInsets.all(16), child: Text('لم يتم تحديد خدمات إضافية (مثل ضرب إبرة، غيار جروح...)')),
+          const Padding(padding: EdgeInsets.all(16), child: Text('لم يتم تحديد خدمات إضافية')),
         ...displayServices.map((s) {
           final doc = doctors.cast<DoctorModel?>().firstWhere((d) => d?.id == s.doctorId, orElse: () => null);
           return Card(
