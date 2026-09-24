@@ -61,12 +61,12 @@ class ClinicAppMaster extends StatelessWidget {
 // ========================== MODELS ==========================
 class UserModel {
   final String id;
-  final String name;
-  final String email;
-  final String password;
-  final String role;
-  final String? linkedDoctorId;
-  final bool isActive;
+  String name;
+  String email;
+  String password;
+  String role;
+  String? linkedDoctorId;
+  bool isActive;
 
   UserModel({
     required this.id,
@@ -101,14 +101,14 @@ class UserModel {
 
 class DoctorModel {
   final String id;
-  final String name;
-  final String specialty;
-  final double consultationFee;
-  final int durationMinutes;
-  final String workStartTime;
-  final String workEndTime;
-  final bool allowReceptionBooking;
-  final bool isActive;
+  String name;
+  String specialty;
+  double consultationFee;
+  int durationMinutes;
+  String workStartTime;
+  String workEndTime;
+  bool allowReceptionBooking;
+  bool isActive;
 
   DoctorModel({
     required this.id,
@@ -150,9 +150,9 @@ class DoctorModel {
 class ClinicServiceModel {
   final String id;
   final String? doctorId;
-  final String name;
-  final double price;
-  final bool isActive;
+  String name;
+  double price;
+  bool isActive;
 
   ClinicServiceModel({
     required this.id,
@@ -643,11 +643,35 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
   void _initSupabaseRealtime() {
     try {
       Supabase.instance.client
-          .channel('public:clinic_realtime')
+          .channel('public:clinic_app_realtime')
           .onPostgresChanges(
             event: PostgresChangeEvent.all,
             schema: 'public',
             table: 'appointments',
+            callback: (p) => _syncWithSupabase(),
+          )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'patients',
+            callback: (p) => _syncWithSupabase(),
+          )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'doctors',
+            callback: (p) => _syncWithSupabase(),
+          )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'clinic_services',
+            callback: (p) => _syncWithSupabase(),
+          )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'users',
             callback: (p) => _syncWithSupabase(),
           )
           .subscribe();
@@ -1011,7 +1035,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= الحجز السريع المقيد بصلاحيات المدير =================
+  // ================= الحجز السريع =================
   void _openQuickBookingDialog({PatientModel? prefilledPatient, String initialVisitType = 'NEW_VISIT'}) {
     final nameCtrl = TextEditingController(text: prefilledPatient?.fullName ?? '');
     final phoneCtrl = TextEditingController(text: prefilledPatient?.phone ?? '');
@@ -1184,7 +1208,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                     ),
                     const SizedBox(height: 10),
                     if (docServices.isNotEmpty) ...[
-                      const Text('خدمات وإجراءات العيادة (تحدد بواسطة السكرتير):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      const Text('خدمات وإجراءات العيادة:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                       Wrap(
                         spacing: 6,
                         children: docServices.map((srv) {
@@ -1805,18 +1829,19 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                     ],
                   ),
                   IconButton(
-                    icon: const Icon(Icons.edit, size: 18, color: Colors.blue),
-                    onPressed: () => _openEditPatientDialog(p),
+                    icon: const Icon(Icons.contact_page_outlined, size: 22, color: Color(0xFF1E3A8A)),
+                    tooltip: 'عرض الملف الطبي الشامل',
+                    onPressed: () => _openPatientProfileDialog(p),
                   ),
                 ],
               ),
               children: [
-                if (p.notes.isNotEmpty || p.chronicDiseases.isNotEmpty)
+                if (p.chronicDiseases.isNotEmpty || p.notes.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                     child: Align(
                       alignment: Alignment.centerRight,
-                      child: Text('التاريخ المرضي / الحساسية: ${p.chronicDiseases.isNotEmpty ? p.chronicDiseases : p.notes}', style: const TextStyle(color: Colors.brown, fontSize: 12, fontWeight: FontWeight.bold)),
+                      child: Text('الأمراض المزمنة / الحساسية: ${p.chronicDiseases.isNotEmpty ? p.chronicDiseases : p.notes}', style: const TextStyle(color: Colors.brown, fontSize: 12, fontWeight: FontWeight.bold)),
                     ),
                   ),
                 const Divider(),
@@ -1839,6 +1864,12 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                           icon: const Icon(Icons.add, size: 16),
                           label: const Text('كشف جديد'),
                         ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.edit, color: Colors.blue),
+                        tooltip: 'تعديل بيانات وأمراض المريض',
+                        onPressed: () => _openEditPatientDialog(p),
                       ),
                     ],
                   ),
@@ -1876,6 +1907,140 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
+  // ================= الملف الطبي الشامل للمريض =================
+  void _openPatientProfileDialog(PatientModel patient) {
+    final patientApps = appointments.where((a) => a.patientPhone == patient.phone).toList();
+    final totalRemaining = patientApps.fold(0.0, (s, a) => s + a.remainingAmount);
+    final totalPaid = patientApps.fold(0.0, (s, a) => s + a.paidAmount);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const CircleAvatar(
+              backgroundColor: Color(0xFF1E3A8A),
+              foregroundColor: Colors.white,
+              child: Icon(Icons.person),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(patient.fullName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  Text('جوال: ${patient.phone} | العمر: ${patient.age} سنة', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // كارت التاريخ المرضي
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: Colors.amber.shade50, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.amber.shade200)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.healing, color: Colors.brown, size: 18),
+                          SizedBox(width: 6),
+                          Text('الأمراض المزمنة / فصيلة الدم / الحساسية:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.brown)),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(patient.chronicDiseases.isNotEmpty ? patient.chronicDiseases : 'لا توجد أمراض مزمنة مسجلة.', style: const TextStyle(fontSize: 12)),
+                      if (patient.notes.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text('ملاحظات خاصة: ${patient.notes}', style: const TextStyle(fontSize: 12, color: Colors.black87)),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // ملخص مالي للمريض
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(8)),
+                        child: Column(
+                          children: [
+                            const Text('إجمالي المدفوعات', style: TextStyle(fontSize: 11, color: Colors.green)),
+                            Text('$totalPaid ر.ي', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.green)),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8)),
+                        child: Column(
+                          children: [
+                            const Text('المتبقي في الذمة', style: TextStyle(fontSize: 11, color: Colors.red)),
+                            Text('$totalRemaining ر.ي', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.red)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                const Text('أرشيف المواعيد والتشخيصات:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                const SizedBox(height: 6),
+                if (patientApps.isEmpty) const Text('لا توجد مواعيد سابقة مسجلة.'),
+                ...patientApps.map((a) => Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(8)),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('${a.appointmentDate} - ${a.startTime}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                          Text('${a.doctorName} (${a.visitType == "RETURN_VISIT" ? "عودة مجانية" : "كشف"})', style: const TextStyle(fontSize: 11)),
+                        ],
+                      ),
+                      Text('الحالة: ${a.status}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A))),
+                    ],
+                  ),
+                )),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton.icon(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _openEditPatientDialog(patient);
+            },
+            icon: const Icon(Icons.edit, size: 16),
+            label: const Text('تعديل الملف الصحي'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('إغلاق'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _openEditPatientDialog(PatientModel patient) {
     final nameCtrl = TextEditingController(text: patient.fullName);
     final phoneCtrl = TextEditingController(text: patient.phone);
@@ -1886,7 +2051,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('تعديل الملف الطبي للمريض'),
+        title: const Text('تعديل الملف الطبي للمريض والتشخيص'),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1894,8 +2059,8 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'الاسم الكامل')),
               TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: 'رقم الجوال')),
               TextField(controller: ageCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'العمر')),
-              TextField(controller: chronicCtrl, decoration: const InputDecoration(labelText: 'أمراض مزمنة / فصيلة الدم')),
-              TextField(controller: notesCtrl, maxLines: 2, decoration: const InputDecoration(labelText: 'ملاحظات طبية / حساسية أدوية')),
+              TextField(controller: chronicCtrl, decoration: const InputDecoration(labelText: 'الأمراض المزمنة / فصيلة الدم (سكر، ضغط، حساسية...)')),
+              TextField(controller: notesCtrl, maxLines: 2, decoration: const InputDecoration(labelText: 'ملاحظات الطبيب وسير العمل')),
             ],
           ),
         ),
@@ -1903,7 +2068,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
-            onPressed: () {
+            onPressed: () async {
               setState(() {
                 patient.fullName = nameCtrl.text.trim();
                 patient.phone = phoneCtrl.text.trim();
@@ -1911,10 +2076,12 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                 patient.notes = notesCtrl.text.trim();
                 patient.chronicDiseases = chronicCtrl.text.trim();
               });
-              _saveAllLocally();
-              _syncWithSupabase();
+              await _saveAllLocally();
+              try {
+                await Supabase.instance.client.from('patients').upsert(patient.toMap());
+              } catch (_) {}
               Navigator.pop(ctx);
-              _showNotification('الملف الطبي', 'تم تحديث بيانات المريض ${patient.fullName}');
+              _showNotification('الملف الطبي', 'تم حفظ تعديل الملف الصحي للمريض ${patient.fullName}');
             },
             child: const Text('حفظ التعديلات'),
           ),
@@ -2027,7 +2194,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= تبويب إدارة العيادات والخدمات والصلاحيات =================
+  // ================= تبويب إدارة العيادات والخدمات والصلاحيات والحذف والتعديل =================
   Widget _buildManagementAndServicesView() {
     final isSecretary = widget.currentUser.role == 'DOCTOR_SECRETARY';
     final currentDocId = isSecretary ? widget.currentUser.linkedDoctorId : null;
@@ -2047,7 +2214,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
               onPressed: () => _openServiceDialog(defaultDocId: currentDocId),
               icon: const Icon(Icons.add, size: 16),
-              label: const Text('خدمة / إجراء جديد'),
+              label: const Text('خدمة جديدة'),
             ),
           ],
         ),
@@ -2061,6 +2228,19 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               leading: const Icon(Icons.medical_services, color: Color(0xFF1E3A8A)),
               title: Text(s.name, style: const TextStyle(fontWeight: FontWeight.bold)),
               subtitle: Text('السعر: ${s.price} ر.ي ${doc != null ? "• عيادة: ${doc.name}" : ""}'),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
+                    onPressed: () => _openServiceDialog(defaultDocId: s.doctorId, existingService: s),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red),
+                    onPressed: () => _deleteService(s),
+                  ),
+                ],
+              ),
             ),
           );
         }),
@@ -2070,7 +2250,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('إدارة الأطباء وصلاحيات حجز الاستقبال', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+              const Text('إدارة الأطباء والعيادات', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
                 onPressed: () => _openDoctorDialog(),
@@ -2081,57 +2261,75 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           ),
           const SizedBox(height: 8),
           ...doctors.map((d) => Card(
-            child: SwitchListTile(
-              secondary: const Icon(Icons.person, color: Color(0xFF1E3A8A)),
-              title: Text(d.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text(
-                '${d.specialty} • كشف: ${d.consultationFee} ر.ي\n'
-                'الدوام: ${d.workStartTime} إلى ${d.workEndTime}\n'
-                'حجز الاستقبال: ${d.allowReceptionBooking ? "مسموح للاستقبال بالحجز" : "محظور (للسكرتير فقط)"}',
-                style: TextStyle(
-                  color: d.allowReceptionBooking ? Colors.green.shade900 : Colors.red.shade900,
-                  fontSize: 12,
+            child: Column(
+              children: [
+                SwitchListTile(
+                  secondary: const Icon(Icons.person, color: Color(0xFF1E3A8A)),
+                  title: Text(d.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text(
+                    '${d.specialty} • كشف: ${d.consultationFee} ر.ي\n'
+                    'الدوام: ${d.workStartTime} إلى ${d.workEndTime}\n'
+                    'حجز الاستقبال: ${d.allowReceptionBooking ? "مسموح للاستقبال بالحجز" : "محظور (للسكرتير فقط)"}',
+                    style: TextStyle(
+                      color: d.allowReceptionBooking ? Colors.green.shade900 : Colors.red.shade900,
+                      fontSize: 12,
+                    ),
+                  ),
+                  isThreeLine: true,
+                  value: d.allowReceptionBooking,
+                  activeColor: const Color(0xFF1E3A8A),
+                  onChanged: (val) async {
+                    setState(() {
+                      final idx = doctors.indexWhere((item) => item.id == d.id);
+                      doctors[idx] = DoctorModel(
+                        id: d.id,
+                        name: d.name,
+                        specialty: d.specialty,
+                        consultationFee: d.consultationFee,
+                        durationMinutes: d.durationMinutes,
+                        workStartTime: d.workStartTime,
+                        workEndTime: d.workEndTime,
+                        allowReceptionBooking: val,
+                        isActive: d.isActive,
+                      );
+                    });
+                    await _saveAllLocally();
+                    try {
+                      await Supabase.instance.client
+                          .from('doctors')
+                          .update({'allow_reception_booking': val})
+                          .eq('id', d.id);
+                    } catch (_) {}
+                  },
                 ),
-              ),
-              isThreeLine: true,
-              value: d.allowReceptionBooking,
-              activeColor: const Color(0xFF1E3A8A),
-              onChanged: (val) async {
-                setState(() {
-                  final idx = doctors.indexWhere((item) => item.id == d.id);
-                  doctors[idx] = DoctorModel(
-                    id: d.id,
-                    name: d.name,
-                    specialty: d.specialty,
-                    consultationFee: d.consultationFee,
-                    durationMinutes: d.durationMinutes,
-                    workStartTime: d.workStartTime,
-                    workEndTime: d.workEndTime,
-                    allowReceptionBooking: val,
-                    isActive: d.isActive,
-                  );
-                });
-                await _saveAllLocally();
-                try {
-                  await Supabase.instance.client
-                      .from('doctors')
-                      .update({'allow_reception_booking': val})
-                      .eq('id', d.id);
-                } catch (_) {}
-                _showNotification(
-                  'صلاحية حجز الطبيب',
-                  val
-                      ? 'تم السماح للاستقبال بحجز مواعيد للطبيب ${d.name}'
-                      : 'تم منع الاستقبال وقصر الحجز على سكرتير الطبيب ${d.name}',
-                );
-              },
+                Padding(
+                  padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton.icon(
+                        icon: const Icon(Icons.edit, size: 18),
+                        label: const Text('تعديل البيانات والدوام'),
+                        onPressed: () => _openDoctorDialog(existingDoctor: d),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton.icon(
+                        style: TextButton.styleFrom(foregroundColor: Colors.red),
+                        icon: const Icon(Icons.delete_forever, size: 18),
+                        label: const Text('حذف الطبيب'),
+                        onPressed: () => _deleteDoctor(d),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           )),
           const Divider(height: 32),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('المستخدمون والصلاحيات', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+              const Text('إدارة المستخدمين وحسابات الموظفين', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
                 onPressed: () => _openUserDialog(),
@@ -2143,30 +2341,29 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           const SizedBox(height: 8),
           ...users.map((u) {
             final linkedDoc = doctors.cast<DoctorModel?>().firstWhere((d) => d?.id == u.linkedDoctorId, orElse: () => null);
+            final isSelf = u.id == widget.currentUser.id;
+
             return Card(
               child: ListTile(
                 leading: Icon(u.role == 'ADMIN' ? Icons.security : (u.role == 'DOCTOR_SECRETARY' ? Icons.badge : Icons.support_agent)),
-                title: Text(u.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                title: Text('${u.name} ${isSelf ? "(أنت - المدير الحالي)" : ""}'),
                 subtitle: Text('${u.email}\nالدور: ${u.role}${linkedDoc != null ? ' (مرتبط بـ ${linkedDoc.name})' : ''}'),
                 isThreeLine: u.linkedDoctorId != null,
-                trailing: Switch(
-                  value: u.isActive,
-                  onChanged: (val) {
-                    setState(() {
-                      final idx = users.indexWhere((item) => item.id == u.id);
-                      users[idx] = UserModel(
-                        id: u.id,
-                        name: u.name,
-                        email: u.email,
-                        password: u.password,
-                        role: u.role,
-                        linkedDoctorId: u.linkedDoctorId,
-                        isActive: val,
-                      );
-                    });
-                    _saveAllLocally();
-                    _syncWithSupabase();
-                  },
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.edit, color: Colors.blue),
+                      tooltip: 'تعديل المستخدم',
+                      onPressed: () => _openUserDialog(existingUser: u),
+                    ),
+                    if (!isSelf)
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, color: Colors.red),
+                        tooltip: 'حذف الحساب',
+                        onPressed: () => _deleteUser(u),
+                      ),
+                  ],
                 ),
               ),
             );
@@ -2176,25 +2373,26 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  void _openDoctorDialog() {
-    final nameCtrl = TextEditingController();
-    final specCtrl = TextEditingController();
-    final feeCtrl = TextEditingController(text: '3000');
-    final durCtrl = TextEditingController(text: '15');
-    final startCtrl = TextEditingController(text: '09:00:00');
-    final endCtrl = TextEditingController(text: '17:00:00');
+  // ================= نوافذ الإضافة والتعديل والحذف =================
+  void _openDoctorDialog({DoctorModel? existingDoctor}) {
+    final nameCtrl = TextEditingController(text: existingDoctor?.name ?? '');
+    final specCtrl = TextEditingController(text: existingDoctor?.specialty ?? '');
+    final feeCtrl = TextEditingController(text: existingDoctor?.consultationFee.toStringAsFixed(0) ?? '3000');
+    final durCtrl = TextEditingController(text: existingDoctor?.durationMinutes.toString() ?? '15');
+    final startCtrl = TextEditingController(text: existingDoctor?.workStartTime ?? '09:00:00');
+    final endCtrl = TextEditingController(text: existingDoctor?.workEndTime ?? '17:00:00');
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('إضافة طبيب جديد وعيادة'),
+        title: Text(existingDoctor == null ? 'إضافة طبيب جديد وعيادة' : 'تعديل بيانات الطبيب'),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'اسم الطبيب')),
               TextField(controller: specCtrl, decoration: const InputDecoration(labelText: 'التخصص')),
-              TextField(controller: feeCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'سعر المعاينة / الكشف (ر.ي)')),
+              TextField(controller: feeCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'سعر المعاينة (ر.ي)')),
               TextField(controller: durCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'مدة الكشف (بالدقائق)')),
               TextField(controller: startCtrl, decoration: const InputDecoration(labelText: 'بداية الدوام (09:00:00)')),
               TextField(controller: endCtrl, decoration: const InputDecoration(labelText: 'نهاية الدوام (17:00:00)')),
@@ -2206,24 +2404,41 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           ElevatedButton(
             onPressed: () async {
               if (nameCtrl.text.isEmpty) return;
-              final newDoc = DoctorModel(
-                id: const Uuid().v4(),
-                name: nameCtrl.text.trim(),
-                specialty: specCtrl.text.trim(),
-                consultationFee: double.tryParse(feeCtrl.text) ?? 3000.0,
-                durationMinutes: int.tryParse(durCtrl.text) ?? 15,
-                workStartTime: startCtrl.text.trim(),
-                workEndTime: endCtrl.text.trim(),
-                allowReceptionBooking: true,
-                isActive: true,
-              );
-              setState(() => doctors.add(newDoc));
-              await _saveAllLocally();
-              try {
-                await Supabase.instance.client.from('doctors').upsert(newDoc.toMap());
-              } catch (_) {}
+
+              if (existingDoctor == null) {
+                final newDoc = DoctorModel(
+                  id: const Uuid().v4(),
+                  name: nameCtrl.text.trim(),
+                  specialty: specCtrl.text.trim(),
+                  consultationFee: double.tryParse(feeCtrl.text) ?? 3000.0,
+                  durationMinutes: int.tryParse(durCtrl.text) ?? 15,
+                  workStartTime: startCtrl.text.trim(),
+                  workEndTime: endCtrl.text.trim(),
+                  allowReceptionBooking: true,
+                  isActive: true,
+                );
+                setState(() => doctors.add(newDoc));
+                await _saveAllLocally();
+                try {
+                  await Supabase.instance.client.from('doctors').upsert(newDoc.toMap());
+                } catch (_) {}
+                _showNotification('إدارة الأطباء', 'تمت إضافة الطبيب ${newDoc.name} بنجاح');
+              } else {
+                setState(() {
+                  existingDoctor.name = nameCtrl.text.trim();
+                  existingDoctor.specialty = specCtrl.text.trim();
+                  existingDoctor.consultationFee = double.tryParse(feeCtrl.text) ?? existingDoctor.consultationFee;
+                  existingDoctor.durationMinutes = int.tryParse(durCtrl.text) ?? existingDoctor.durationMinutes;
+                  existingDoctor.workStartTime = startCtrl.text.trim();
+                  existingDoctor.workEndTime = endCtrl.text.trim();
+                });
+                await _saveAllLocally();
+                try {
+                  await Supabase.instance.client.from('doctors').upsert(existingDoctor.toMap());
+                } catch (_) {}
+                _showNotification('إدارة الأطباء', 'تم تحديث بيانات الطبيب ${existingDoctor.name}');
+              }
               Navigator.pop(ctx);
-              _showNotification('إدارة الأطباء', 'تمت إضافة الطبيب ${newDoc.name} بنجاح');
             },
             child: const Text('حفظ'),
           ),
@@ -2232,15 +2447,41 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  void _openServiceDialog({String? defaultDocId}) {
-    final nameCtrl = TextEditingController();
-    final priceCtrl = TextEditingController(text: '1500');
-    String? assignedDocId = defaultDocId;
+  void _deleteDoctor(DoctorModel doc) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('تأكيد حذف الطبيب'),
+        content: Text('هل أنت متأكد من حذف الطبيب "${doc.name}"؟ سيتم حذف ربطه بالمواعيد والخدمات.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () async {
+              setState(() => doctors.removeWhere((d) => d.id == doc.id));
+              await _saveAllLocally();
+              try {
+                await Supabase.instance.client.from('doctors').delete().eq('id', doc.id);
+              } catch (_) {}
+              Navigator.pop(ctx);
+              _showNotification('حذف طبيب', 'تم حذف الطبيب ${doc.name} من النظام');
+            },
+            child: const Text('حذف نهائي'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openServiceDialog({String? defaultDocId, ClinicServiceModel? existingService}) {
+    final nameCtrl = TextEditingController(text: existingService?.name ?? '');
+    final priceCtrl = TextEditingController(text: existingService?.price.toStringAsFixed(0) ?? '1500');
+    String? assignedDocId = existingService?.doctorId ?? defaultDocId;
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('إضافة خدمة / إجراء طبي'),
+        title: Text(existingService == null ? 'إضافة خدمة / إجراء طبي' : 'تعديل الخدمة الطبية'),
         content: StatefulBuilder(
           builder: (context, setDlgState) => Column(
             mainAxisSize: MainAxisSize.min,
@@ -2252,7 +2493,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               TextField(
                 controller: priceCtrl,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'السعر (ر.ي)'),
+                decoration: const InputDecoration(labelText: 'السعر بالريال اليمني'),
               ),
               if (widget.currentUser.role == 'ADMIN') ...[
                 const SizedBox(height: 10),
@@ -2274,20 +2515,36 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           ElevatedButton(
             onPressed: () async {
               if (nameCtrl.text.isEmpty) return;
-              final newSrv = ClinicServiceModel(
-                id: const Uuid().v4(),
-                doctorId: assignedDocId,
-                name: nameCtrl.text.trim(),
-                price: double.tryParse(priceCtrl.text) ?? 0.0,
-                isActive: true,
-              );
-              setState(() => services.add(newSrv));
-              await _saveAllLocally();
-              try {
-                await Supabase.instance.client.from('clinic_services').upsert(newSrv.toMap());
-              } catch (_) {}
+
+              if (existingService == null) {
+                final newSrv = ClinicServiceModel(
+                  id: const Uuid().v4(),
+                  doctorId: assignedDocId,
+                  name: nameCtrl.text.trim(),
+                  price: double.tryParse(priceCtrl.text) ?? 0.0,
+                  isActive: true,
+                );
+                setState(() => services.add(newSrv));
+                await _saveAllLocally();
+                try {
+                  await Supabase.instance.client.from('clinic_services').upsert(newSrv.toMap());
+                } catch (_) {}
+                _showNotification('الخدمات الطبية', 'تمت إضافة الخدمة ${newSrv.name}');
+              } else {
+                setState(() {
+                  existingService.name = nameCtrl.text.trim();
+                  existingService.price = double.tryParse(priceCtrl.text) ?? existingService.price;
+                  if (widget.currentUser.role == 'ADMIN') {
+                    // تحديث الطبيب إذا كان مديراً
+                  }
+                });
+                await _saveAllLocally();
+                try {
+                  await Supabase.instance.client.from('clinic_services').upsert(existingService.toMap());
+                } catch (_) {}
+                _showNotification('الخدمات الطبية', 'تم تحديث الخدمة ${existingService.name}');
+              }
               Navigator.pop(ctx);
-              _showNotification('الخدمات الطبية', 'تمت إضافة الخدمة ${newSrv.name}');
             },
             child: const Text('حفظ'),
           ),
@@ -2296,17 +2553,43 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  void _openUserDialog() {
-    final nameCtrl = TextEditingController();
-    final emailCtrl = TextEditingController();
-    final passCtrl = TextEditingController(text: '123456');
-    String role = 'RECEPTIONIST';
-    String? linkedDoctorId;
+  void _deleteService(ClinicServiceModel srv) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('تأكيد حذف الخدمة'),
+        content: Text('هل أنت متأكد من حذف خدمة "${srv.name}"؟'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () async {
+              setState(() => services.removeWhere((s) => s.id == srv.id));
+              await _saveAllLocally();
+              try {
+                await Supabase.instance.client.from('clinic_services').delete().eq('id', srv.id);
+              } catch (_) {}
+              Navigator.pop(ctx);
+              _showNotification('حذف خدمة', 'تم حذف الخدمة ${srv.name}');
+            },
+            child: const Text('حذف'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openUserDialog({UserModel? existingUser}) {
+    final nameCtrl = TextEditingController(text: existingUser?.name ?? '');
+    final emailCtrl = TextEditingController(text: existingUser?.email ?? '');
+    final passCtrl = TextEditingController(text: existingUser?.password ?? '123456');
+    String role = existingUser?.role ?? 'RECEPTIONIST';
+    String? linkedDoctorId = existingUser?.linkedDoctorId;
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('إضافة مستخدم وربط الصلاحيات'),
+        title: Text(existingUser == null ? 'إضافة مستخدم جديد' : 'تعديل المستخدم والصلاحيات'),
         content: StatefulBuilder(
           builder: (context, setDlgState) => SingleChildScrollView(
             child: Column(
@@ -2345,24 +2628,66 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           ElevatedButton(
             onPressed: () async {
               if (nameCtrl.text.isEmpty || emailCtrl.text.isEmpty) return;
-              final newUser = UserModel(
-                id: const Uuid().v4(),
-                name: nameCtrl.text.trim(),
-                email: emailCtrl.text.trim(),
-                password: passCtrl.text.trim(),
-                role: role,
-                linkedDoctorId: role == 'DOCTOR_SECRETARY' ? linkedDoctorId : null,
-                isActive: true,
-              );
-              setState(() => users.add(newUser));
-              await _saveAllLocally();
-              try {
-                await Supabase.instance.client.from('users').upsert(newUser.toMap());
-              } catch (_) {}
+
+              if (existingUser == null) {
+                final newUser = UserModel(
+                  id: const Uuid().v4(),
+                  name: nameCtrl.text.trim(),
+                  email: emailCtrl.text.trim(),
+                  password: passCtrl.text.trim(),
+                  role: role,
+                  linkedDoctorId: role == 'DOCTOR_SECRETARY' ? linkedDoctorId : null,
+                  isActive: true,
+                );
+                setState(() => users.add(newUser));
+                await _saveAllLocally();
+                try {
+                  await Supabase.instance.client.from('users').upsert(newUser.toMap());
+                } catch (_) {}
+                _showNotification('إدارة المستخدمين', 'تم إنشاء حساب ${newUser.name}');
+              } else {
+                setState(() {
+                  existingUser.name = nameCtrl.text.trim();
+                  existingUser.email = emailCtrl.text.trim();
+                  existingUser.password = passCtrl.text.trim();
+                  existingUser.role = role;
+                  existingUser.linkedDoctorId = role == 'DOCTOR_SECRETARY' ? linkedDoctorId : null;
+                });
+                await _saveAllLocally();
+                try {
+                  await Supabase.instance.client.from('users').upsert(existingUser.toMap());
+                } catch (_) {}
+                _showNotification('إدارة المستخدمين', 'تم تحديث حساب ${existingUser.name}');
+              }
               Navigator.pop(ctx);
-              _showNotification('إدارة المستخدمين', 'تم إنشاء حساب ${newUser.name}');
             },
             child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _deleteUser(UserModel user) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('تأكيد حذف الحساب'),
+        content: Text('هل أنت متأكد من حذف حساب "${user.name}" نهائياً من النظام؟'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () async {
+              setState(() => users.removeWhere((u) => u.id == user.id));
+              await _saveAllLocally();
+              try {
+                await Supabase.instance.client.from('users').delete().eq('id', user.id);
+              } catch (_) {}
+              Navigator.pop(ctx);
+              _showNotification('حذف مستخدم', 'تم حذف حساب ${user.name}');
+            },
+            child: const Text('حذف'),
           ),
         ],
       ),
