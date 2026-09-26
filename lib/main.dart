@@ -16,7 +16,10 @@ const String supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
+    await Supabase.initialize(
+      url: supabaseUrl, 
+      anonKey: supabaseAnonKey,
+    );
   } catch (e) {
     debugPrint('Supabase Init Info: $e');
   }
@@ -59,7 +62,7 @@ class ClinicAppMaster extends StatelessWidget {
 
 // ========================== MODELS ==========================
 class UserModel {
-  String id;
+  final String id;
   String name;
   String username;
   String password;
@@ -99,7 +102,7 @@ class UserModel {
 }
 
 class DoctorModel {
-  String id;
+  final String id;
   String name;
   String specialty;
   double consultationFee;
@@ -147,8 +150,8 @@ class DoctorModel {
 }
 
 class ClinicServiceModel {
-  String id;
-  String? doctorId;
+  final String id;
+  final String? doctorId;
   String name;
   double price;
   bool isActive;
@@ -179,7 +182,7 @@ class ClinicServiceModel {
 }
 
 class PatientModel {
-  String id;
+  final String id;
   String fullName;
   String phone;
   int age;
@@ -197,15 +200,20 @@ class PatientModel {
     this.chronicDiseases = '',
   });
 
-  Map<String, dynamic> toMap() => {
-    'id': id,
-    'full_name': fullName,
-    'phone': phone,
-    'age': age,
-    'gender': gender,
-    'notes': notes,
-    'chronic_diseases': chronicDiseases,
-  };
+  Map<String, dynamic> toMap() {
+    final map = <String, dynamic>{
+      'id': id,
+      'full_name': fullName,
+      'phone': phone,
+      'age': age,
+      'gender': gender,
+      'notes': notes,
+    };
+    if (chronicDiseases.isNotEmpty) {
+      map['chronic_diseases'] = chronicDiseases;
+    }
+    return map;
+  }
 
   factory PatientModel.fromMap(Map<String, dynamic> m) => PatientModel(
     id: m['id']?.toString() ?? const Uuid().v4(),
@@ -454,7 +462,7 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(backgroundColor: Colors.red, content: Text('فشل تسجيل الدخول: تأكد من اسم المستخدم أو كلمة المرور')),
+          const SnackBar(backgroundColor: Colors.red, content: Text('فشل تسجيل الدخول: اسم المستخدم أو كلمة المرور غير صحيحة')),
         );
       }
     } finally {
@@ -609,7 +617,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     await prefs.setString('clinic_appointment_services', jsonEncode(appointmentServices.map((e) => e.toMap()).toList()));
   }
 
-  // المزامنة الحقيقية الآمنة مع أسبقية السحابة لحل مشكلة duplicate key نهائياً
   Future<void> _manualSyncNow() async {
     if (isSyncing) return;
     setState(() => isSyncing = true);
@@ -617,7 +624,51 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     try {
       final client = Supabase.instance.client;
 
-      // الخطوة 1: جلب البيانات السحابية أولاً لمعرفة الحسابات الموجودة مسبقاً
+      // 1. رفع الأطباء
+      for (var d in doctors) {
+        await client.from('doctors').upsert(d.toMap());
+      }
+
+      // 2. رفع المستخدمين مع منع التعارض على الإيميل
+      for (var u in users) {
+        await client.from('users').upsert(u.toMap(), onConflict: 'email');
+      }
+
+      // 3. رفع المرضى بطريقة آمنة تماماً
+      for (var p in patients) {
+        try {
+          await client.from('patients').upsert(p.toMap(), onConflict: 'phone');
+        } catch (_) {
+          // إذا لم يكن العمود موجوداً بعد في السحابة يتم إرسال الحقول الأساسية
+          await client.from('patients').upsert({
+            'id': p.id,
+            'full_name': p.fullName,
+            'phone': p.phone,
+            'age': p.age,
+            'gender': p.gender,
+            'notes': p.notes,
+          }, onConflict: 'phone');
+        }
+      }
+
+      // 4. رفع الخدمات
+      for (var s in services) {
+        await client.from('clinic_services').upsert(s.toMap());
+      }
+
+      // 5. رفع المواعيد
+      final unsynced = appointments.where((a) => !a.isSynced).toList();
+      for (var app in unsynced) {
+        await client.from('appointments').upsert(app.toMap());
+        app.isSynced = true;
+      }
+
+      // 6. رفع الدفعات
+      for (var pay in payments) {
+        await client.from('payments').upsert(pay.toMap());
+      }
+
+      // 7. جلب البيانات من السحابة لدمجها مع الهواتف الأخرى
       final pRes = await client.from('patients').select();
       final dRes = await client.from('doctors').select();
       final sRes = await client.from('clinic_services').select();
@@ -626,67 +677,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
 
       final cloudDoctors = (dRes as List).map((e) => DoctorModel.fromMap(e)).toList();
       final cloudPatients = (pRes as List).map((e) => PatientModel.fromMap(e)).toList();
-      final cloudUsers = (uRes as List).map((e) => UserModel.fromMap(e)).toList();
-      final cloudServices = (sRes as List).map((e) => ClinicServiceModel.fromMap(e)).toList();
 
-      // الخطوة 2: رفع المستخدمين المحليين الذين ليس لديهم تكرار في اسم المستخدم
-      for (var localUser in users) {
-        final exists = cloudUsers.any((cu) => cu.username.toLowerCase() == localUser.username.toLowerCase());
-        if (!exists) {
-          try {
-            await client.from('users').insert(localUser.toMap());
-            cloudUsers.add(localUser);
-          } catch (_) {}
-        }
-      }
-
-      // الخطوة 3: رفع الأطباء
-      for (var localDoc in doctors) {
-        final exists = cloudDoctors.any((cd) => cd.id == localDoc.id);
-        if (!exists) {
-          try {
-            await client.from('doctors').insert(localDoc.toMap());
-            cloudDoctors.add(localDoc);
-          } catch (_) {}
-        } else {
-          try {
-            await client.from('doctors').update(localDoc.toMap()).eq('id', localDoc.id);
-          } catch (_) {}
-        }
-      }
-
-      // الخطوة 4: رفع المرضى مع منع تكرار الهاتف
-      for (var localPatient in patients) {
-        final exists = cloudPatients.any((cp) => cp.phone == localPatient.phone);
-        if (!exists) {
-          try {
-            await client.from('patients').insert(localPatient.toMap());
-            cloudPatients.add(localPatient);
-          } catch (_) {}
-        }
-      }
-
-      // الخطوة 5: رفع الخدمات الطبية
-      for (var localSrv in services) {
-        final exists = cloudServices.any((cs) => cs.id == localSrv.id);
-        if (!exists) {
-          try {
-            await client.from('clinic_services').insert(localSrv.toMap());
-            cloudServices.add(localSrv);
-          } catch (_) {}
-        }
-      }
-
-      // الخطوة 6: رفع المواعيد غير المتزامنة
-      final unsynced = appointments.where((a) => !a.isSynced).toList();
-      for (var app in unsynced) {
-        try {
-          await client.from('appointments').upsert(app.toMap());
-          app.isSynced = true;
-        } catch (_) {}
-      }
-
-      // الخطوة 7: دمج الحجوزات السحابية والمحلية بذكاء
       final Map<String, AppointmentModel> mergedApps = {};
       for (var local in appointments) {
         mergedApps[local.id] = local;
@@ -701,8 +692,8 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
       setState(() {
         doctors = cloudDoctors;
         patients = cloudPatients;
-        services = cloudServices;
-        users = cloudUsers;
+        services = (sRes as List).map((e) => ClinicServiceModel.fromMap(e)).toList();
+        users = (uRes as List).map((e) => UserModel.fromMap(e)).toList();
         appointments = mergedApps.values.toList();
         appointments.sort((a, b) => b.startTime.compareTo(a.startTime));
       });
@@ -717,7 +708,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               children: [
                 Icon(Icons.check_circle, color: Colors.white),
                 SizedBox(width: 8),
-                Text('تمت المزامنة بنجاح واسترجاع كافة البيانات!'),
+                Text('تمت المزامنة بنجاح واكتمال الربط مع السحابة!'),
               ],
             ),
           ),
@@ -996,7 +987,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
 
               await _saveAllLocally();
               Navigator.pop(ctx);
-              _showNotification('تم تسجيل السداد محلياً', 'تم سداد $amount ر.ي (اضغط زر المزامنة لرفعها)');
+              _showNotification('تم تسجيل السداد محلياً', 'تم سداد $amount ر.ي (انقر زر المزامنة لرفعها)');
               _printReceiptPdf(app, newReceipt);
             },
             child: const Text('تأكيد السداد وطباعة السند'),
@@ -1350,7 +1341,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
 
                         _showNotification(
                           visitType == 'RETURN_VISIT' ? 'تم تسجيل عودة المريض بنجاح' : 'تم تأكيد الحجز الجديد',
-                          'المريض: ${p.fullName} - د. ${selectedDoc.name} (انقر زر المزامنة لنقلها للعيادة)',
+                          'المريض: ${p.fullName} - د. ${selectedDoc.name} (انقر زر المزامنة لبثه للأجهزة)',
                         );
 
                         if (conflictResolved) {
