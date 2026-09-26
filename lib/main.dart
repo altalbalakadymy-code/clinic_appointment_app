@@ -16,7 +16,10 @@ const String supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
+    await Supabase.initialize(
+      url: supabaseUrl, 
+      anonKey: supabaseAnonKey,
+    );
   } catch (e) {
     debugPrint('Supabase Init Info: $e');
   }
@@ -61,7 +64,7 @@ class ClinicAppMaster extends StatelessWidget {
 class UserModel {
   final String id;
   String name;
-  String email;
+  String username;
   String password;
   String role;
   String? linkedDoctorId;
@@ -70,7 +73,7 @@ class UserModel {
   UserModel({
     required this.id,
     required this.name,
-    required this.email,
+    required this.username,
     required this.password,
     required this.role,
     this.linkedDoctorId,
@@ -80,7 +83,7 @@ class UserModel {
   Map<String, dynamic> toMap() => {
     'id': id,
     'name': name,
-    'email': email,
+    'email': username.trim().toLowerCase(), // نستخدم حقل email في قاعدة البيانات لتخزين اسم المستخدم
     'password_hash': password,
     'role': role,
     'linked_doctor_id': linkedDoctorId,
@@ -90,7 +93,7 @@ class UserModel {
   factory UserModel.fromMap(Map<String, dynamic> m) => UserModel(
     id: m['id']?.toString() ?? const Uuid().v4(),
     name: m['name'] ?? '',
-    email: m['email'] ?? '',
+    username: m['email'] ?? m['username'] ?? '',
     password: m['password_hash'] ?? m['password'] ?? '123456',
     role: m['role'] ?? 'RECEPTIONIST',
     linkedDoctorId: m['linked_doctor_id']?.toString(),
@@ -371,7 +374,7 @@ class AuthGateScreen extends StatefulWidget {
 }
 
 class _AuthGateScreenState extends State<AuthGateScreen> {
-  final emailCtrl = TextEditingController();
+  final userCtrl = TextEditingController();
   final passCtrl = TextEditingController();
   bool isLoading = false;
   bool obscurePass = true;
@@ -397,12 +400,12 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
   }
 
   Future<void> _handleLogin() async {
-    final email = emailCtrl.text.trim();
+    final username = userCtrl.text.trim().toLowerCase();
     final pass = passCtrl.text.trim();
 
-    if (email.isEmpty || pass.isEmpty) {
+    if (username.isEmpty || pass.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('يرجى إدخال البريد الإلكتروني وكلمة المرور')),
+        const SnackBar(content: Text('يرجى إدخال اسم المستخدم وكلمة المرور')),
       );
       return;
     }
@@ -414,7 +417,7 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
       final res = await Supabase.instance.client
           .from('users')
           .select()
-          .eq('email', email)
+          .eq('email', username)
           .eq('password_hash', pass)
           .maybeSingle();
 
@@ -436,7 +439,8 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
       if (localUsersStr != null) {
         final List list = jsonDecode(localUsersStr);
         final matched = list.cast<Map<String, dynamic>>().firstWhere(
-          (m) => m['email'] == email && (m['password_hash'] == pass || m['password'] == pass),
+          (m) => (m['email']?.toString().toLowerCase() == username || m['username']?.toString().toLowerCase() == username) &&
+                 (m['password_hash'] == pass || m['password'] == pass),
           orElse: () => {},
         );
         if (matched.isNotEmpty) {
@@ -453,7 +457,7 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: Colors.red, content: Text('فشل تسجيل الدخول: ${e.toString()}')),
+          SnackBar(backgroundColor: Colors.red, content: Text('فشل تسجيل الدخول: اسم المستخدم أو كلمة المرور غير صحيحة')),
         );
       }
     } finally {
@@ -495,11 +499,10 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
                   child: Column(
                     children: [
                       TextField(
-                        controller: emailCtrl,
-                        keyboardType: TextInputType.emailAddress,
+                        controller: userCtrl,
                         decoration: InputDecoration(
-                          labelText: 'البريد الإلكتروني',
-                          prefixIcon: const Icon(Icons.email_outlined),
+                          labelText: 'اسم المستخدم',
+                          prefixIcon: const Icon(Icons.person_outline),
                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                         ),
                       ),
@@ -609,7 +612,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     await prefs.setString('clinic_appointment_services', jsonEncode(appointmentServices.map((e) => e.toMap()).toList()));
   }
 
-  // المزامنة اليدوية الحصرية عند النقر على الزر
+  // المزامنة اليدوية الفورية مع تفادي أي تعارض في أسماء المستخدمين
   Future<void> _manualSyncNow() async {
     if (isSyncing) return;
     setState(() => isSyncing = true);
@@ -617,27 +620,39 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     try {
       final client = Supabase.instance.client;
 
-      // 1. رفع كل السجلات المحلية إلى السحابة فوراً
+      // 1. رفع وتحديث الأطباء
       for (var d in doctors) {
         await client.from('doctors').upsert(d.toMap());
       }
+
+      // 2. رفع المستخدمين مع مطابقة صريحة على اسم المستخدم (email في السحابة) لمنع التكرار
       for (var u in users) {
-        await client.from('users').upsert(u.toMap());
+        await client.from('users').upsert(u.toMap(), onConflict: 'email');
       }
+
+      // 3. رفع وتحديث المرضى
       for (var p in patients) {
-        await client.from('patients').upsert(p.toMap());
+        await client.from('patients').upsert(p.toMap(), onConflict: 'phone');
       }
+
+      // 4. رفع الخدمات
       for (var s in services) {
         await client.from('clinic_services').upsert(s.toMap());
       }
 
+      // 5. رفع المواعيد
       final unsynced = appointments.where((a) => !a.isSynced).toList();
       for (var app in unsynced) {
         await client.from('appointments').upsert(app.toMap());
         app.isSynced = true;
       }
 
-      // 2. جلب كافة السجلات الجديدة المرفوعة من الأجهزة الأخرى
+      // 6. رفع سندات القبض
+      for (var pay in payments) {
+        await client.from('payments').upsert(pay.toMap());
+      }
+
+      // 7. جلب كافة السجلات الجديدة المرفوعة من الأجهزة الأخرى
       final pRes = await client.from('patients').select();
       final dRes = await client.from('doctors').select();
       final sRes = await client.from('clinic_services').select();
@@ -647,7 +662,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
       final cloudDoctors = (dRes as List).map((e) => DoctorModel.fromMap(e)).toList();
       final cloudPatients = (pRes as List).map((e) => PatientModel.fromMap(e)).toList();
 
-      // دمج التحديثات بدون مسح الحجوزات غير المتزامنة
       final Map<String, AppointmentModel> mergedApps = {};
       for (var local in appointments) {
         mergedApps[local.id] = local;
@@ -678,7 +692,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               children: [
                 Icon(Icons.check_circle, color: Colors.white),
                 SizedBox(width: 8),
-                Text('تمت المزامنة بنجاح وتحديث كافة الأجهزة الآن!'),
+                Text('تمت المزامنة بنجاح واكتمال الربط السحابي لكافة الحسابات!'),
               ],
             ),
           ),
@@ -689,7 +703,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: Colors.red.shade800,
-            content: Text('تعذرت المزامنة: يرجى التحقق من اتصال الإنترنت (${e.toString()})'),
+            content: Text('خطأ أثناء المزامنة: ${e.toString()}'),
           ),
         );
       }
@@ -967,7 +981,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= الحجز السريع المحلي الفوري =================
   void _openQuickBookingDialog({PatientModel? prefilledPatient, String initialVisitType = 'NEW_VISIT'}) {
     final nameCtrl = TextEditingController(text: prefilledPatient?.fullName ?? '');
     final phoneCtrl = TextEditingController(text: prefilledPatient?.phone ?? '');
@@ -1423,7 +1436,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      unsyncedCount == 0 ? 'كافة البيانات متزامنة مع السحابة' : '$unsyncedCount حجوزات جاهزة للرفع (اضغط أيقونة المزامنة)',
+                      unsyncedCount == 0 ? 'كافة البيانات متزامنة مع السحابة' : '$unsyncedCount حجوزات جاهزة للرفع (اضغط زر المزامنة بالأعلى)',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
@@ -2266,7 +2279,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               child: ListTile(
                 leading: Icon(u.role == 'ADMIN' ? Icons.security : (u.role == 'DOCTOR_SECRETARY' ? Icons.badge : Icons.support_agent)),
                 title: Text('${u.name} ${isSelf ? "(أنت - المدير الحالي)" : ""}'),
-                subtitle: Text('${u.email}\nالدور: ${u.role}${linkedDoc != null ? ' (مرتبط بـ ${linkedDoc.name})' : ''}'),
+                subtitle: Text('اسم المستخدم: ${u.username}\nالدور: ${u.role}${linkedDoc != null ? ' (مرتبط بـ ${linkedDoc.name})' : ''}'),
                 isThreeLine: u.linkedDoctorId != null,
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -2484,7 +2497,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
 
   void _openUserDialog({UserModel? existingUser}) {
     final nameCtrl = TextEditingController(text: existingUser?.name ?? '');
-    final emailCtrl = TextEditingController(text: existingUser?.email ?? '');
+    final usernameCtrl = TextEditingController(text: existingUser?.username ?? '');
     final passCtrl = TextEditingController(text: existingUser?.password ?? '123456');
     String role = existingUser?.role ?? 'RECEPTIONIST';
     String? linkedDoctorId = existingUser?.linkedDoctorId;
@@ -2498,8 +2511,8 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'الاسم')),
-                TextField(controller: emailCtrl, decoration: const InputDecoration(labelText: 'البريد الإلكتروني')),
+                TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'الاسم الظاهر')),
+                TextField(controller: usernameCtrl, decoration: const InputDecoration(labelText: 'اسم المستخدم (User ID للدخول)')),
                 TextField(controller: passCtrl, decoration: const InputDecoration(labelText: 'كلمة المرور')),
                 DropdownButtonFormField<String>(
                   value: role,
@@ -2530,13 +2543,13 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
           ElevatedButton(
             onPressed: () async {
-              if (nameCtrl.text.isEmpty || emailCtrl.text.isEmpty) return;
+              if (nameCtrl.text.isEmpty || usernameCtrl.text.isEmpty) return;
 
               if (existingUser == null) {
                 final newUser = UserModel(
                   id: const Uuid().v4(),
                   name: nameCtrl.text.trim(),
-                  email: emailCtrl.text.trim(),
+                  username: usernameCtrl.text.trim().toLowerCase(),
                   password: passCtrl.text.trim(),
                   role: role,
                   linkedDoctorId: role == 'DOCTOR_SECRETARY' ? linkedDoctorId : null,
@@ -2548,7 +2561,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               } else {
                 setState(() {
                   existingUser.name = nameCtrl.text.trim();
-                  existingUser.email = emailCtrl.text.trim();
+                  existingUser.username = usernameCtrl.text.trim().toLowerCase();
                   existingUser.password = passCtrl.text.trim();
                   existingUser.role = role;
                   existingUser.linkedDoctorId = role == 'DOCTOR_SECRETARY' ? linkedDoctorId : null;
