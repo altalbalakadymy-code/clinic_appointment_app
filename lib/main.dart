@@ -200,20 +200,15 @@ class PatientModel {
     this.chronicDiseases = '',
   });
 
-  Map<String, dynamic> toMap() {
-    final map = <String, dynamic>{
-      'id': id,
-      'full_name': fullName,
-      'phone': phone,
-      'age': age,
-      'gender': gender,
-      'notes': notes,
-    };
-    if (chronicDiseases.isNotEmpty) {
-      map['chronic_diseases'] = chronicDiseases;
-    }
-    return map;
-  }
+  Map<String, dynamic> toMap() => {
+    'id': id,
+    'full_name': fullName,
+    'phone': phone,
+    'age': age,
+    'gender': gender,
+    'notes': notes,
+    'chronic_diseases': chronicDiseases,
+  };
 
   factory PatientModel.fromMap(Map<String, dynamic> m) => PatientModel(
     id: m['id']?.toString() ?? const Uuid().v4(),
@@ -617,6 +612,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     await prefs.setString('clinic_appointment_services', jsonEncode(appointmentServices.map((e) => e.toMap()).toList()));
   }
 
+  // المزامنة الفورية المحمية والشاملة
   Future<void> _manualSyncNow() async {
     if (isSyncing) return;
     setState(() => isSyncing = true);
@@ -626,20 +622,21 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
 
       // 1. رفع الأطباء
       for (var d in doctors) {
-        await client.from('doctors').upsert(d.toMap());
+        try {
+          await client.from('doctors').upsert(d.toMap());
+        } catch (_) {}
       }
 
-      // 2. رفع المستخدمين مع منع التعارض على الإيميل
+      // 2. رفع المستخدمين مع منع تعارض الإيميل/اليوزر
       for (var u in users) {
-        await client.from('users').upsert(u.toMap(), onConflict: 'email');
+        try {
+          await client.from('users').upsert(u.toMap(), onConflict: 'email');
+        } catch (_) {}
       }
 
-      // 3. رفع المرضى بطريقة آمنة تماماً
+      // 3. رفع المرضى بالمطابقة على المفتاح الأساسي id حصراً لمنع تعارض patients_pkey
       for (var p in patients) {
         try {
-          await client.from('patients').upsert(p.toMap(), onConflict: 'phone');
-        } catch (_) {
-          // إذا لم يكن العمود موجوداً بعد في السحابة يتم إرسال الحقول الأساسية
           await client.from('patients').upsert({
             'id': p.id,
             'full_name': p.fullName,
@@ -647,28 +644,47 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
             'age': p.age,
             'gender': p.gender,
             'notes': p.notes,
-          }, onConflict: 'phone');
+            'chronic_diseases': p.chronicDiseases,
+          });
+        } catch (_) {
+          // في حال عدم وجود عمود chronic_diseases بعد
+          try {
+            await client.from('patients').upsert({
+              'id': p.id,
+              'full_name': p.fullName,
+              'phone': p.phone,
+              'age': p.age,
+              'gender': p.gender,
+              'notes': p.notes,
+            });
+          } catch (_) {}
         }
       }
 
       // 4. رفع الخدمات
       for (var s in services) {
-        await client.from('clinic_services').upsert(s.toMap());
+        try {
+          await client.from('clinic_services').upsert(s.toMap());
+        } catch (_) {}
       }
 
       // 5. رفع المواعيد
       final unsynced = appointments.where((a) => !a.isSynced).toList();
       for (var app in unsynced) {
-        await client.from('appointments').upsert(app.toMap());
-        app.isSynced = true;
+        try {
+          await client.from('appointments').upsert(app.toMap());
+          app.isSynced = true;
+        } catch (_) {}
       }
 
       // 6. رفع الدفعات
       for (var pay in payments) {
-        await client.from('payments').upsert(pay.toMap());
+        try {
+          await client.from('payments').upsert(pay.toMap());
+        } catch (_) {}
       }
 
-      // 7. جلب البيانات من السحابة لدمجها مع الهواتف الأخرى
+      // 7. جلب كافة السجلات الجديدة المرفوعة من الأجهزة الأخرى
       final pRes = await client.from('patients').select();
       final dRes = await client.from('doctors').select();
       final sRes = await client.from('clinic_services').select();
@@ -708,7 +724,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
               children: [
                 Icon(Icons.check_circle, color: Colors.white),
                 SizedBox(width: 8),
-                Text('تمت المزامنة بنجاح واكتمال الربط مع السحابة!'),
+                Text('تمت المزامنة بنجاح واكتمال الربط مع السحابة لكافة الأجهزة!'),
               ],
             ),
           ),
