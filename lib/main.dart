@@ -16,13 +16,7 @@ const String supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    await Supabase.initialize(
-      url: supabaseUrl, 
-      anonKey: supabaseAnonKey,
-      realtimeClientOptions: const RealtimeClientOptions(
-        eventsPerSecond: 10,
-      ),
-    );
+    await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
   } catch (e) {
     debugPrint('Supabase Init Info: $e');
   }
@@ -563,9 +557,6 @@ class ClinicMainDashboard extends StatefulWidget {
 class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
   int _currentIndex = 0;
   bool isSyncing = false;
-  bool isOnline = true;
-  Timer? _autoSyncTimer;
-  RealtimeChannel? _liveChannel;
 
   List<UserModel> users = [];
   List<DoctorModel> doctors = [];
@@ -583,25 +574,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
   void initState() {
     super.initState();
     _loadAllData();
-    _initSupabaseRealtime();
-    _startPeriodicSync();
-  }
-
-  @override
-  void dispose() {
-    _autoSyncTimer?.cancel();
-    if (_liveChannel != null) {
-      Supabase.instance.client.removeChannel(_liveChannel!);
-    }
-    super.dispose();
-  }
-
-  void _startPeriodicSync() {
-    _autoSyncTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (!isSyncing) {
-        _syncWithSupabase(silent: true);
-      }
-    });
   }
 
   Future<void> _loadAllData() async {
@@ -624,7 +596,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     if (asStr != null) appointmentServices = (jsonDecode(asStr) as List).map((e) => AppointmentServiceModel.fromMap(e)).toList();
 
     setState(() {});
-    _syncWithSupabase();
   }
 
   Future<void> _saveAllLocally() async {
@@ -638,52 +609,27 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     await prefs.setString('clinic_appointment_services', jsonEncode(appointmentServices.map((e) => e.toMap()).toList()));
   }
 
-  void _initSupabaseRealtime() {
-    try {
-      final client = Supabase.instance.client;
-      final uniqueChannel = 'clinic_sync_${DateTime.now().microsecondsSinceEpoch}';
-
-      _liveChannel = client.channel(uniqueChannel)
-        ..onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'appointments',
-          callback: (payload) => _syncWithSupabase(silent: true),
-        )
-        ..onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'patients',
-          callback: (payload) => _syncWithSupabase(silent: true),
-        )
-        ..onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'doctors',
-          callback: (payload) => _syncWithSupabase(silent: true),
-        )
-        ..onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'clinic_services',
-          callback: (payload) => _syncWithSupabase(silent: true),
-        )
-        ..subscribe((status, [error]) {
-          if (status == RealtimeSubscribeStatus.subscribed) {
-            if (mounted) setState(() => isOnline = true);
-          }
-        });
-    } catch (e) {
-      debugPrint('Realtime setup: $e');
-    }
-  }
-
-  Future<void> _syncWithSupabase({bool silent = false}) async {
+  // المزامنة اليدوية الحصرية عند النقر على الزر
+  Future<void> _manualSyncNow() async {
     if (isSyncing) return;
-    if (!silent && mounted) setState(() => isSyncing = true);
+    setState(() => isSyncing = true);
 
     try {
       final client = Supabase.instance.client;
+
+      // 1. رفع كل السجلات المحلية إلى السحابة فوراً
+      for (var d in doctors) {
+        await client.from('doctors').upsert(d.toMap());
+      }
+      for (var u in users) {
+        await client.from('users').upsert(u.toMap());
+      }
+      for (var p in patients) {
+        await client.from('patients').upsert(p.toMap());
+      }
+      for (var s in services) {
+        await client.from('clinic_services').upsert(s.toMap());
+      }
 
       final unsynced = appointments.where((a) => !a.isSynced).toList();
       for (var app in unsynced) {
@@ -691,34 +637,64 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
         app.isSynced = true;
       }
 
+      // 2. جلب كافة السجلات الجديدة المرفوعة من الأجهزة الأخرى
       final pRes = await client.from('patients').select();
       final dRes = await client.from('doctors').select();
       final sRes = await client.from('clinic_services').select();
       final aRes = await client.from('appointments').select();
       final uRes = await client.from('users').select();
 
-      if (mounted) {
-        setState(() {
-          isOnline = true;
-          doctors = (dRes as List).map((e) => DoctorModel.fromMap(e)).toList();
-          services = (sRes as List).map((e) => ClinicServiceModel.fromMap(e)).toList();
-          patients = (pRes as List).map((e) => PatientModel.fromMap(e)).toList();
-          users = (uRes as List).map((e) => UserModel.fromMap(e)).toList();
+      final cloudDoctors = (dRes as List).map((e) => DoctorModel.fromMap(e)).toList();
+      final cloudPatients = (pRes as List).map((e) => PatientModel.fromMap(e)).toList();
 
-          appointments = (aRes as List).map((m) {
-            final d = doctors.cast<DoctorModel?>().firstWhere((doc) => doc?.id == m['doctor_id'], orElse: () => null);
-            final p = patients.cast<PatientModel?>().firstWhere((pat) => pat?.id == m['patient_id'], orElse: () => null);
-            return AppointmentModel.fromMap(m, doc: d, pat: p);
-          }).toList();
-        });
+      // دمج التحديثات بدون مسح الحجوزات غير المتزامنة
+      final Map<String, AppointmentModel> mergedApps = {};
+      for (var local in appointments) {
+        mergedApps[local.id] = local;
+      }
+      for (var m in (aRes as List)) {
+        final d = cloudDoctors.cast<DoctorModel?>().firstWhere((doc) => doc?.id == m['doctor_id'], orElse: () => null);
+        final p = cloudPatients.cast<PatientModel?>().firstWhere((pat) => pat?.id == m['patient_id'], orElse: () => null);
+        final cloudApp = AppointmentModel.fromMap(m, doc: d, pat: p);
+        mergedApps[cloudApp.id] = cloudApp;
       }
 
+      setState(() {
+        doctors = cloudDoctors;
+        patients = cloudPatients;
+        services = (sRes as List).map((e) => ClinicServiceModel.fromMap(e)).toList();
+        users = (uRes as List).map((e) => UserModel.fromMap(e)).toList();
+        appointments = mergedApps.values.toList();
+        appointments.sort((a, b) => b.startTime.compareTo(a.startTime));
+      });
+
       await _saveAllLocally();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Colors.green,
+            content: Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.white),
+                SizedBox(width: 8),
+                Text('تمت المزامنة بنجاح وتحديث كافة الأجهزة الآن!'),
+              ],
+            ),
+          ),
+        );
+      }
     } catch (e) {
-      if (mounted) setState(() => isOnline = false);
-      debugPrint('Sync status: Offline mode active');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: Colors.red.shade800,
+            content: Text('تعذرت المزامنة: يرجى التحقق من اتصال الإنترنت (${e.toString()})'),
+          ),
+        );
+      }
     } finally {
-      if (mounted && !silent) setState(() => isSyncing = false);
+      if (mounted) setState(() => isSyncing = false);
     }
   }
 
@@ -861,7 +837,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     await Printing.layoutPdf(onLayout: (format) async => pdf.save());
   }
 
-  // ================= طباعة تقرير اليوم =================
   Future<void> _printDailyClosingPdf(DateTime date, List<AppointmentModel> dayApps) async {
     final pdf = pw.Document();
     final font = await PdfGoogleFonts.cairoRegular();
@@ -976,21 +951,13 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                 app.paidAmount += amount;
                 app.remainingAmount -= amount;
                 app.paymentStatus = app.remainingAmount == 0 ? 'PAID' : 'PARTIALLY_PAID';
+                app.isSynced = false;
                 payments.add(newReceipt);
               });
 
               await _saveAllLocally();
-              try {
-                await Supabase.instance.client.from('payments').upsert(newReceipt.toMap());
-                await Supabase.instance.client.from('appointments').update({
-                  'paid_amount': app.paidAmount,
-                  'remaining_amount': app.remainingAmount,
-                  'payment_status': app.paymentStatus,
-                }).eq('id', app.id);
-              } catch (_) {}
-
               Navigator.pop(ctx);
-              _showNotification('تم تسجيل السداد', 'تم سداد $amount ر.ي للمريض ${app.patientName}');
+              _showNotification('تم تسجيل السداد محلياً', 'تم سداد $amount ر.ي (انقر زر المزامنة لرفعها)');
               _printReceiptPdf(app, newReceipt);
             },
             child: const Text('تأكيد السداد وطباعة السند'),
@@ -1000,7 +967,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= الحجز السريع المباشر للسحابة =================
+  // ================= الحجز السريع المحلي الفوري =================
   void _openQuickBookingDialog({PatientModel? prefilledPatient, String initialVisitType = 'NEW_VISIT'}) {
     final nameCtrl = TextEditingController(text: prefilledPatient?.fullName ?? '');
     final phoneCtrl = TextEditingController(text: prefilledPatient?.phone ?? '');
@@ -1316,12 +1283,24 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                           isSynced: false,
                         );
 
-                        try {
-                          await Supabase.instance.client.from('patients').upsert(p.toMap());
-                          await Supabase.instance.client.from('appointments').upsert(newApp.toMap());
-                          newApp.isSynced = true;
-                        } catch (e) {
-                          debugPrint('Direct upload failed: $e');
+                        for (var srv in selectedExtraServices) {
+                          appointmentServices.add(AppointmentServiceModel(
+                            id: const Uuid().v4(),
+                            appointmentId: newAppId,
+                            serviceName: srv.name,
+                            price: srv.price,
+                          ));
+                        }
+
+                        if (paid > 0) {
+                          payments.add(PaymentReceiptModel(
+                            id: const Uuid().v4(),
+                            appointmentId: newAppId,
+                            patientId: p.id,
+                            amount: paid,
+                            paymentMethod: paymentMethod,
+                            paymentDate: DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now()),
+                          ));
                         }
 
                         setState(() {
@@ -1333,7 +1312,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
 
                         _showNotification(
                           visitType == 'RETURN_VISIT' ? 'تم تسجيل عودة المريض بنجاح' : 'تم تأكيد الحجز الجديد',
-                          'المريض: ${p.fullName} - د. ${selectedDoc.name}',
+                          'المريض: ${p.fullName} - د. ${selectedDoc.name} (انقر زر المزامنة لبثه للأجهزة)',
                         );
 
                         if (conflictResolved) {
@@ -1345,7 +1324,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                         }
                       },
                       icon: const Icon(Icons.check_circle_outline),
-                      label: const Text('تأكيد وحفظ الموعد', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      label: const Text('تأكيد وحفظ الموعد محلياً', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                     ),
                   ],
                 ),
@@ -1385,13 +1364,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     });
 
     await _saveAllLocally();
-    try {
-      await Supabase.instance.client
-          .from('appointments')
-          .update({'status': newStatus})
-          .eq('id', item.id);
-    } catch (_) {}
-
     _showNotification('تحديث حالة المريض', 'تم تغيير حالة ${item.patientName} إلى: $newStatus');
   }
 
@@ -1409,14 +1381,14 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
         ),
         actions: [
           IconButton(
-            tooltip: 'مزامنة السحابة',
-            onPressed: isSyncing ? null : () => _syncWithSupabase(),
+            tooltip: 'مزامنة السحابة الآن',
+            onPressed: isSyncing ? null : _manualSyncNow,
             icon: isSyncing
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                 : Badge(
                     label: Text('$unsyncedCount'),
                     isLabelVisible: unsyncedCount > 0,
-                    child: const Icon(Icons.cloud_sync_outlined),
+                    child: const Icon(Icons.cloud_sync_outlined, size: 28),
                   ),
           ),
           IconButton(
@@ -1439,7 +1411,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
         children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: isOnline ? const Color(0xFFDCFCE7) : const Color(0xFFFEF3C7),
+            color: unsyncedCount == 0 ? const Color(0xFFDCFCE7) : const Color(0xFFFEF3C7),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -1447,15 +1419,15 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                   children: [
                     CircleAvatar(
                       radius: 5,
-                      backgroundColor: isOnline ? Colors.green.shade700 : Colors.amber.shade800,
+                      backgroundColor: unsyncedCount == 0 ? Colors.green.shade700 : Colors.amber.shade800,
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      isOnline ? 'سحابي متزامن (مباشر)' : 'محلي أوفلاين (جاري إعادة الاتصال)',
+                      unsyncedCount == 0 ? 'كافة البيانات متزامنة مع السحابة' : '$unsyncedCount حجوزات جاهزة للرفع (اضغط أيقونة المزامنة)',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
-                        color: isOnline ? Colors.green.shade900 : Colors.amber.shade900,
+                        color: unsyncedCount == 0 ? Colors.green.shade900 : Colors.amber.shade900,
                       ),
                     ),
                   ],
@@ -2033,11 +2005,8 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                 patient.chronicDiseases = chronicCtrl.text.trim();
               });
               await _saveAllLocally();
-              try {
-                await Supabase.instance.client.from('patients').upsert(patient.toMap());
-              } catch (_) {}
               Navigator.pop(ctx);
-              _showNotification('الملف الطبي', 'تم حفظ تعديل الملف الصحي للمريض ${patient.fullName}');
+              _showNotification('الملف الطبي', 'تم حفظ التعديل محلياً (انقر زر المزامنة لرفعه)');
             },
             child: const Text('حفظ التعديلات'),
           ),
@@ -2150,7 +2119,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
     );
   }
 
-  // ================= تبويب إدارة العيادات والخدمات =================
+  // ================= تبويب إدارة العيادات والخدمات والصلاحيات =================
   Widget _buildManagementAndServicesView() {
     final isSecretary = widget.currentUser.role == 'DOCTOR_SECRETARY';
     final currentDocId = isSecretary ? widget.currentUser.linkedDoctorId : null;
@@ -2250,12 +2219,6 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                       );
                     });
                     await _saveAllLocally();
-                    try {
-                      await Supabase.instance.client
-                          .from('doctors')
-                          .update({'allow_reception_booking': val})
-                          .eq('id', d.id);
-                    } catch (_) {}
                   },
                 ),
                 Padding(
@@ -2374,10 +2337,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                 );
                 setState(() => doctors.add(newDoc));
                 await _saveAllLocally();
-                try {
-                  await Supabase.instance.client.from('doctors').upsert(newDoc.toMap());
-                } catch (_) {}
-                _showNotification('إدارة الأطباء', 'تمت إضافة الطبيب ${newDoc.name} بنجاح');
+                _showNotification('إدارة الأطباء', 'تم حفظ الطبيب محلياً (انقر زر المزامنة لرفعه)');
               } else {
                 setState(() {
                   existingDoctor.name = nameCtrl.text.trim();
@@ -2388,10 +2348,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                   existingDoctor.workEndTime = endCtrl.text.trim();
                 });
                 await _saveAllLocally();
-                try {
-                  await Supabase.instance.client.from('doctors').upsert(existingDoctor.toMap());
-                } catch (_) {}
-                _showNotification('إدارة الأطباء', 'تم تحديث بيانات الطبيب ${existingDoctor.name}');
+                _showNotification('إدارة الأطباء', 'تم تحديث بيانات الطبيب محلياً');
               }
               Navigator.pop(ctx);
             },
@@ -2407,7 +2364,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('تأكيد حذف الطبيب'),
-        content: Text('هل أنت متأكد من حذف الطبيب "${doc.name}"؟ سيتم حذف ربطه بالمواعيد والخدمات.'),
+        content: Text('هل أنت متأكد من حذف الطبيب "${doc.name}"؟'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
           ElevatedButton(
@@ -2419,7 +2376,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                 await Supabase.instance.client.from('doctors').delete().eq('id', doc.id);
               } catch (_) {}
               Navigator.pop(ctx);
-              _showNotification('حذف طبيب', 'تم حذف الطبيب ${doc.name} من النظام');
+              _showNotification('حذف طبيب', 'تم حذف الطبيب ${doc.name}');
             },
             child: const Text('حذف نهائي'),
           ),
@@ -2481,20 +2438,14 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                 );
                 setState(() => services.add(newSrv));
                 await _saveAllLocally();
-                try {
-                  await Supabase.instance.client.from('clinic_services').upsert(newSrv.toMap());
-                } catch (_) {}
-                _showNotification('الخدمات الطبية', 'تمت إضافة الخدمة ${newSrv.name}');
+                _showNotification('الخدمات الطبية', 'تمت إضافة الخدمة محلياً');
               } else {
                 setState(() {
                   existingService.name = nameCtrl.text.trim();
                   existingService.price = double.tryParse(priceCtrl.text) ?? existingService.price;
                 });
                 await _saveAllLocally();
-                try {
-                  await Supabase.instance.client.from('clinic_services').upsert(existingService.toMap());
-                } catch (_) {}
-                _showNotification('الخدمات الطبية', 'تم تحديث الخدمة ${existingService.name}');
+                _showNotification('الخدمات الطبية', 'تم تحديث الخدمة محلياً');
               }
               Navigator.pop(ctx);
             },
@@ -2593,10 +2544,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                 );
                 setState(() => users.add(newUser));
                 await _saveAllLocally();
-                try {
-                  await Supabase.instance.client.from('users').upsert(newUser.toMap());
-                } catch (_) {}
-                _showNotification('إدارة المستخدمين', 'تم إنشاء حساب ${newUser.name}');
+                _showNotification('إدارة المستخدمين', 'تم إنشاء الحساب محلياً');
               } else {
                 setState(() {
                   existingUser.name = nameCtrl.text.trim();
@@ -2606,10 +2554,7 @@ class _ClinicMainDashboardState extends State<ClinicMainDashboard> {
                   existingUser.linkedDoctorId = role == 'DOCTOR_SECRETARY' ? linkedDoctorId : null;
                 });
                 await _saveAllLocally();
-                try {
-                  await Supabase.instance.client.from('users').upsert(existingUser.toMap());
-                } catch (_) {}
-                _showNotification('إدارة المستخدمين', 'تم تحديث حساب ${existingUser.name}');
+                _showNotification('إدارة المستخدمين', 'تم تحديث بيانات الحساب محلياً');
               }
               Navigator.pop(ctx);
             },
